@@ -464,9 +464,25 @@ function scheduleCloudPush(){
   pushDebounceTimer = setTimeout(pushToCloudSilent, 700);
 }
 
+/* Filet de sécurité : Firestore refuse tout champ valant undefined
+   quelque part dans l'objet, et rejette alors l'écriture ENTIÈRE
+   silencieusement si on ne le rattrape pas. On nettoie donc toujours
+   juste avant l'envoi, quelle que soit l'origine de la donnée. */
+function stripUndefinedDeep(value){
+  if(Array.isArray(value)) return value.map(stripUndefinedDeep);
+  if(value && typeof value === 'object'){
+    const out = {};
+    Object.keys(value).forEach(k=>{
+      if(value[k] !== undefined) out[k] = stripUndefinedDeep(value[k]);
+    });
+    return out;
+  }
+  return value;
+}
+
 async function pushToCloudSilent(){
   try{
-    await window.__firestoreWrite(data);
+    await window.__firestoreWrite(stripUndefinedDeep(data));
     syncMeta.lastSync = new Date().toISOString();
     saveSyncMeta();
   }catch(e){
@@ -522,12 +538,14 @@ function mergeStates(local, remote){
   merged.menu = {};
   const dates = new Set([...Object.keys(local.menu||{}), ...Object.keys(remote.menu||{})]);
   dates.forEach(d=>{
-    merged.menu[d] = {};
+    const dayMerged = {};
     MEAL_TYPES.forEach(mt=>{
       const l = local.menu && local.menu[d] && local.menu[d][mt.key];
       const r = remote.menu && remote.menu[d] && remote.menu[d][mt.key];
-      merged.menu[d][mt.key] = r || l || undefined;
+      const slot = r || l;
+      if(slot) dayMerged[mt.key] = slot;
     });
+    if(Object.keys(dayMerged).length) merged.menu[d] = dayMerged;
   });
   return merged;
 }
@@ -875,7 +893,7 @@ function ensureRecipeInLibrary(recipe){
     instructions: recipe.instructions || '',
     notes: recipe.notes || '',
     airFryer: !!recipe.airFryer,
-    source: recipe.source ? {...recipe.source} : undefined
+    source: recipe.source ? {...recipe.source} : null
   };
   data.recipes.push(copy);
   return copy;
@@ -1141,7 +1159,7 @@ function openRecipeForm(recipe){
         instructions: sheet.querySelector('#rf-instr').value.trim(),
         notes: sheet.querySelector('#rf-notes').value.trim(),
         airFryer: airFryerOn,
-        source: recipe && recipe.source ? recipe.source : undefined
+        source: recipe && recipe.source ? recipe.source : null
       };
       if(recipe){
         const idx = data.recipes.findIndex(r=>r.id===recipe.id);
