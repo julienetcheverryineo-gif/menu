@@ -393,7 +393,19 @@ const INTERNET_RECIPES = [
   { id:'net-10', nom:'Wraps œufs brouillés et avocat', types:['petit-dej','dejeuner'], calories:310,
     ingredients:[{nom:'Œufs',quantite:'6',unite:''},{nom:'Fromage blanc allégé',quantite:'4',unite:'c. à soupe'},{nom:'Beurre',quantite:'1',unite:'noisette'},{nom:'Avocat',quantite:'2',unite:''},{nom:'Citron',quantite:'1',unite:''},{nom:'Tortillas de maïs',quantite:'4',unite:''}],
     instructions:"Battre les œufs avec le fromage blanc, assaisonner et cuire en œufs brouillés dans une poêle beurrée. Couper les avocats en dés et les arroser de jus de citron. Garnir les tortillas d'œufs brouillés et d'avocat, puis rouler.",
-    notes:'', source:{label:'Demotivateur Food', url:'https://www.demotivateur.fr/food/15-petits-dejeuners-minceur-et-gourmands-pour-garder-la-ligne-28861'} }
+    notes:'', source:{label:'Demotivateur Food', url:'https://www.demotivateur.fr/food/15-petits-dejeuners-minceur-et-gourmands-pour-garder-la-ligne-28861'} },
+  { id:'net-11', nom:'Brochettes de poulet et légumes à l\u2019air fryer', types:['dejeuner','diner'], calories:228, airFryer:true,
+    ingredients:[{nom:'Poulet (escalope)',quantite:'1',unite:''},{nom:'Courgette',quantite:'50',unite:'g'},{nom:'Poivron',quantite:'1/2',unite:''},{nom:'Tomates cerises',quantite:'50',unite:'g'},{nom:'Oignon rouge',quantite:'1/4',unite:''},{nom:'Ail',quantite:'1/2',unite:'gousse'},{nom:'Paprika fumé',quantite:'1/2',unite:'c. à café'},{nom:'Salade verte',quantite:'2',unite:'poignées'}],
+    instructions:"Couper les poivrons, courgettes et oignon rouge en morceaux. Couper le poulet en cubes. Assaisonner légumes et poulet séparément avec l'ail râpé, le paprika fumé, un filet d'huile d'olive, sel et poivre. Enfiler en alternance sur des piques : poulet, oignon, courgette, tomate cerise, poivron. Cuire au air fryer 10 à 12 minutes à 200°C. Servir avec la salade verte assaisonnée.",
+    notes:"Utensile : air fryer.", source:{label:'Jow', url:'https://jow.fr/fr/recipes/brochettes-de-poulet-et-legumes-au-air-fryer-95c1mceh6xvqefv608fe'} },
+  { id:'net-12', nom:'Poulet et ratatouille à l\u2019air fryer', types:['dejeuner','diner'], calories:318, airFryer:true,
+    ingredients:[{nom:'Poulet (escalope)',quantite:'1',unite:''},{nom:'Mélange de céréales cuites',quantite:'70',unite:'g'},{nom:'Poivron',quantite:'50',unite:'g'},{nom:'Courgette',quantite:'50',unite:'g'},{nom:'Tomate',quantite:'50',unite:'g'},{nom:'Aubergine',quantite:'50',unite:'g'},{nom:'Oignon jaune',quantite:'1/2',unite:''},{nom:'Ail',quantite:'1/2',unite:'gousse'},{nom:'Herbes de Provence',quantite:'1',unite:'pincée'}],
+    instructions:"Couper l'aubergine, la courgette, le poivron et la tomate en dés ; émincer l'oignon et l'ail. Mettre oignon, ail, courgette, poivron et aubergine dans le panier du air fryer avec la moitié des herbes de Provence, un filet d'huile d'olive, sel et poivre. Cuire 20 minutes à 180°C, mélanger, ajouter la tomate et poursuivre 10 minutes. En parallèle, cuire le poulet assaisonné du reste d'herbes 10 à 12 minutes à 200°C. Réchauffer les céréales et servir le tout ensemble.",
+    notes:"Ustensile : air fryer.", source:{label:'Jow', url:'https://jow.fr/fr/recipes/poulet-et-ratatouille-au-air-fryer-93uvb7ry46wp654617r1'} },
+  { id:'net-13', nom:'Poulet à la grecque à l\u2019air fryer', types:['dejeuner','diner'], calories:550, airFryer:true,
+    ingredients:[{nom:'Poulet (haut de cuisse)',quantite:'1',unite:''},{nom:'Pommes de terre',quantite:'250',unite:'g'},{nom:'Tomates cerises',quantite:'100',unite:'g'},{nom:'Feta',quantite:'30',unite:'g'},{nom:'Olives de Kalamata',quantite:'20',unite:'g'},{nom:'Oignon rouge',quantite:'1/4',unite:''},{nom:'Citron jaune',quantite:'1',unite:'quartier'}],
+    instructions:"Couper les pommes de terre en 2 ou 4 selon leur taille, et l'oignon rouge en quartiers fins. Déposer le poulet et les pommes de terre dans le panier du air fryer avec un filet d'huile d'olive, sel et poivre, mélanger et cuire 20 à 25 minutes à 220°C. Ajouter les tomates cerises et poursuivre la cuisson 5 minutes à 220°C. Servir avec les olives coupées grossièrement, la feta émiettée, un filet de citron et quelques herbes fraîches.",
+    notes:"Ustensile : air fryer.", source:{label:'Jow', url:'https://jow.fr/fr/recipes/poulet-a-la-grecque-au-air-fryer-91uriuq34d2o03jr0x51'} }
 ];
 
 function defaultData(){
@@ -478,7 +490,81 @@ function startRealtimeSync(){
   if(!syncEnabled()) return;
   window.__firestoreListen(applyRemoteUpdate);
 }
-window.addEventListener('firestore-ready', startRealtimeSync);
+
+function waitForFirestoreReady(timeoutMs){
+  return new Promise(resolve=>{
+    if(window.__firestoreEnabled !== undefined){ resolve(); return; }
+    let done = false;
+    window.addEventListener('firestore-ready', ()=>{ if(!done){ done=true; resolve(); } }, {once:true});
+    setTimeout(()=>{ if(!done){ done=true; resolve(); } }, timeoutMs);
+  });
+}
+
+/* Fusionne deux tableaux par une clé (le distant l'emporte en cas de
+   doublon) — utilisé pour ne rien perdre au tout premier contact avec
+   l'espace partagé, plutôt que d'écraser aveuglément l'un ou l'autre. */
+function mergeByKey(localArr, remoteArr, keyFn){
+  const map = new Map();
+  (localArr||[]).forEach(item=>{ try{ map.set(keyFn(item), item); }catch(e){} });
+  (remoteArr||[]).forEach(item=>{ try{ map.set(keyFn(item), item); }catch(e){} });
+  return Array.from(map.values());
+}
+
+function mergeStates(local, remote){
+  const merged = defaultData();
+  merged.recipes = mergeByKey(local.recipes, remote.recipes, r=>r.nom.trim().toLowerCase());
+  merged.historique = mergeByKey(local.historique, remote.historique, h=>h.id);
+  merged.courses = mergeByKey(local.courses, remote.courses, c=>c.id);
+  merged.stock = {};
+  STOCK_ZONES.forEach(z=>{
+    merged.stock[z.key] = mergeByKey((local.stock&&local.stock[z.key])||[], (remote.stock&&remote.stock[z.key])||[], i=>i.id);
+  });
+  merged.menu = {};
+  const dates = new Set([...Object.keys(local.menu||{}), ...Object.keys(remote.menu||{})]);
+  dates.forEach(d=>{
+    merged.menu[d] = {};
+    MEAL_TYPES.forEach(mt=>{
+      const l = local.menu && local.menu[d] && local.menu[d][mt.key];
+      const r = remote.menu && remote.menu[d] && remote.menu[d][mt.key];
+      merged.menu[d][mt.key] = r || l || undefined;
+    });
+  });
+  return merged;
+}
+
+/* Premier contact avec l'espace partagé : on lit ce qui existe déjà
+   côté cloud et on FUSIONNE avec les données locales, au lieu de
+   pousser aveuglément les données locales (ce qui écraserait les
+   recettes ajoutées par l'autre personne si ce push arrivait avant
+   d'avoir reçu les siennes). Seul le tout premier appareil à se
+   connecter (aucune donnée cloud du tout) sème les recettes de départ. */
+async function initialCloudSync(){
+  if(!syncEnabled()){ seedIfEmpty(); return; }
+  try{
+    const remote = await window.__firestoreRead();
+    applyingRemote = true;
+    data = mergeStates(data, remote);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    applyingRemote = false;
+    syncMeta.lastSync = new Date().toISOString();
+    saveSyncMeta();
+    scheduleCloudPush(); // renvoie la fusion si elle contenait du nouveau
+  }catch(e){
+    if(e && e.message && e.message.indexOf('Aucune donnée trouvée') !== -1){
+      seedIfEmpty();
+    } else {
+      console.error('Lecture initiale de l\u2019espace partagé impossible', e);
+    }
+  }
+}
+
+async function boot(){
+  render(); // affichage immédiat avec les données en cache local
+  await waitForFirestoreReady(4000);
+  await initialCloudSync();
+  startRealtimeSync();
+  render(); // corrige l'affichage si la fusion a changé quelque chose
+}
 
 /* ============================================================
    UTILITAIRES DATE
@@ -510,6 +596,7 @@ function weekDates(refMonday){
 let currentTab = 'menu';
 let weekOffset = 0; // 0 = semaine courante
 let recipeFilterType = 'all';
+let recipeFilterAirFryer = false;
 let recipeSearch = '';
 let histSearch = '';
 
@@ -646,18 +733,25 @@ function renderMealRow(dateISO, mt){
     </div>`;
 }
 
-function pickerModalHTML(dateISO, mealKey){
-  const candidates = data.recipes.filter(r=>r.types.includes(mealKey));
-  const items = candidates.length ? candidates.map(r=>`
+function pickerListHTML(mealKey, airFryerOnly){
+  let candidates = data.recipes.filter(r=>r.types.includes(mealKey));
+  if(airFryerOnly) candidates = candidates.filter(r=>r.airFryer);
+  return candidates.length ? candidates.map(r=>`
       <div class="stock-item" style="cursor:pointer" data-pick="${r.id}">
         <div>
           <div class="sname">${esc(r.nom)}</div>
-          <div class="sqty">${r.calories?r.calories+' kcal':'—'}</div>
+          <div class="sqty">${r.calories?r.calories+' kcal':'—'}${r.airFryer?' · Air fryer':''}</div>
         </div>
         <span class="muted">›</span>
-      </div>`).join('') : `<div class="empty-state"><p>Aucune recette enregistrée pour ce repas pour l\u2019instant. Ajoute-en depuis l\u2019onglet Recettes.</p></div>`;
+      </div>`).join('') : `<div class="empty-state"><p>Aucune recette${airFryerOnly?' à air fryer':''} enregistrée pour ce repas pour l\u2019instant. Ajoute-en depuis l\u2019onglet Recettes.</p></div>`;
+}
+
+function pickerModalHTML(dateISO, mealKey){
   return `<div class="modal-head"><h2>Choisir une recette</h2><button class="modal-close" data-act="closeModal">&times;</button></div>
-    <div>${items}</div>`;
+    <div class="row wrap" style="margin-bottom:12px;">
+      <button type="button" class="type-chip" id="pickerAirFryerToggle">Air fryer uniquement</button>
+    </div>
+    <div id="pickerList">${pickerListHTML(mealKey, false)}</div>`;
 }
 
 function chooseRandom(dateISO, mealKey){
@@ -780,6 +874,7 @@ function ensureRecipeInLibrary(recipe){
     ingredients: (recipe.ingredients||[]).map(i=>({...i})),
     instructions: recipe.instructions || '',
     notes: recipe.notes || '',
+    airFryer: !!recipe.airFryer,
     source: recipe.source ? {...recipe.source} : undefined
   };
   data.recipes.push(copy);
@@ -819,13 +914,23 @@ function attachMenuEvents(){
   main.querySelectorAll('button[data-act="choisir"]').forEach(b=>b.onclick=()=>{
     const {date, meal} = b.dataset;
     openModal(pickerModalHTML(date, meal), sheet=>{
-      sheet.querySelectorAll('[data-pick]').forEach(el=>el.onclick=()=>{
-        const slot = ensureSlot(date, meal);
-        slot.recipeId = el.dataset.pick;
-        saveData();
-        closeModal();
-        render();
-      });
+      let airFryerOnly = false;
+      function wirePicks(){
+        sheet.querySelectorAll('[data-pick]').forEach(el=>el.onclick=()=>{
+          const slot = ensureSlot(date, meal);
+          slot.recipeId = el.dataset.pick;
+          saveData();
+          closeModal();
+          render();
+        });
+      }
+      wirePicks();
+      sheet.querySelector('#pickerAirFryerToggle').onclick = (e)=>{
+        airFryerOnly = !airFryerOnly;
+        e.target.classList.toggle('on');
+        sheet.querySelector('#pickerList').innerHTML = pickerListHTML(meal, airFryerOnly);
+        wirePicks();
+      };
       sheet.querySelector('[data-act="closeModal"]').onclick = closeModal;
     });
   });
@@ -881,6 +986,7 @@ function attachMenuEvents(){
 function renderRecettesTab(){
   let list = data.recipes.slice();
   if(recipeFilterType!=='all') list = list.filter(r=>r.types.includes(recipeFilterType));
+  if(recipeFilterAirFryer) list = list.filter(r=>r.airFryer);
   if(recipeSearch.trim()) {
     const s = recipeSearch.trim().toLowerCase();
     list = list.filter(r=>r.nom.toLowerCase().includes(s));
@@ -892,9 +998,12 @@ function renderRecettesTab(){
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
       <input type="text" id="recipeSearchInput" placeholder="Chercher une recette" value="${esc(recipeSearch)}">
     </div>
-    <div class="row wrap" style="margin-bottom:14px;">
+    <div class="row wrap" style="margin-bottom:10px;">
       <button class="type-chip ${recipeFilterType==='all'?'on':''}" data-filtertype="all">Toutes</button>
       ${MEAL_TYPES.map(mt=>`<button class="type-chip ${recipeFilterType===mt.key?'on':''}" data-filtertype="${mt.key}">${mt.label}</button>`).join('')}
+    </div>
+    <div class="row wrap" style="margin-bottom:14px;">
+      <button class="type-chip ${recipeFilterAirFryer?'on':''}" data-filterairfryer="1">Air fryer uniquement</button>
     </div>
     <button class="btn btn-primary btn-block fab-add" data-act="newRecipe" style="margin-bottom:16px;">+ Nouvelle recette</button>
   `;
@@ -914,8 +1023,9 @@ function renderRecettesTab(){
         </div>
         <div class="row wrap" style="margin-top:8px; gap:6px;">
           ${r.types.map(t=>`<span class="pill accent">${MEAL_TYPES.find(m=>m.key===t).label}</span>`).join('')}
+          ${r.airFryer ? `<span class="pill" style="background:var(--internet-wash); color:var(--internet);">Air fryer</span>` : ''}
           ${count ? `<span class="pill">réalisée ${count}×</span>` : ''}
-          ${r.source ? `<span class="pill" style="background:var(--internet-wash); color:var(--internet);">internet</span>` : ''}
+          ${r.source ? `<span class="pill">internet</span>` : ''}
         </div>
       </div>`;
     });
@@ -924,7 +1034,7 @@ function renderRecettesTab(){
 }
 
 function recipeFormHTML(recipe){
-  const r = recipe || {id:null, nom:'', types:[], calories:'', ingredients:[{nom:'',quantite:'',unite:''}], instructions:'', notes:''};
+  const r = recipe || {id:null, nom:'', types:[], calories:'', ingredients:[{nom:'',quantite:'',unite:''}], instructions:'', notes:'', airFryer:false};
   const ingRows = (r.ingredients.length?r.ingredients:[{nom:'',quantite:'',unite:''}]).map((ing,i)=>`
     <div class="ing-row" data-ingrow>
       <input type="text" placeholder="Ingrédient" value="${esc(ing.nom)}" data-ing="nom">
@@ -945,6 +1055,9 @@ function recipeFormHTML(recipe){
         <div class="row wrap" style="gap:6px;">
           ${MEAL_TYPES.map(mt=>`<button type="button" class="type-chip ${r.types.includes(mt.key)?'on':''}" data-toggletype="${mt.key}">${mt.label}</button>`).join('')}
         </div>
+      </div>
+      <div class="field">
+        <button type="button" class="type-chip ${r.airFryer?'on':''}" id="rf-airfryer">Se prépare à l\u2019air fryer</button>
       </div>
       <div class="field">
         <label class="field-label">Calories (par portion, optionnel)</label>
@@ -975,6 +1088,7 @@ function recipeFormHTML(recipe){
 function openRecipeForm(recipe){
   openModal(recipeFormHTML(recipe), sheet=>{
     let selectedTypes = new Set(recipe ? recipe.types : []);
+    let airFryerOn = !!(recipe && recipe.airFryer);
     sheet.querySelector('[data-act="closeModal"]').onclick = closeModal;
     sheet.querySelectorAll('[data-toggletype]').forEach(chip=>{
       chip.onclick = ()=>{
@@ -983,6 +1097,10 @@ function openRecipeForm(recipe){
         chip.classList.toggle('on');
       };
     });
+    sheet.querySelector('#rf-airfryer').onclick = (e)=>{
+      airFryerOn = !airFryerOn;
+      e.target.classList.toggle('on');
+    };
     function addIngRow(){
       const div = document.createElement('div');
       div.className='ing-row'; div.setAttribute('data-ingrow','');
@@ -1022,6 +1140,7 @@ function openRecipeForm(recipe){
         ingredients,
         instructions: sheet.querySelector('#rf-instr').value.trim(),
         notes: sheet.querySelector('#rf-notes').value.trim(),
+        airFryer: airFryerOn,
         source: recipe && recipe.source ? recipe.source : undefined
       };
       if(recipe){
@@ -1044,6 +1163,7 @@ function attachRecettesEvents(){
     searchInput.addEventListener('input', ()=>{ recipeSearch = searchInput.value; render(); searchInput.focus(); searchInput.setSelectionRange(searchInput.value.length,searchInput.value.length); });
   }
   main.querySelectorAll('[data-filtertype]').forEach(b=>b.onclick=()=>{ recipeFilterType=b.dataset.filtertype; render(); });
+  main.querySelectorAll('[data-filterairfryer]').forEach(b=>b.onclick=()=>{ recipeFilterAirFryer=!recipeFilterAirFryer; render(); });
   main.querySelectorAll('[data-act="newRecipe"]').forEach(b=>b.onclick=()=>openRecipeForm(null));
   main.querySelectorAll('[data-openrecipe]').forEach(c=>c.onclick=()=>{
     const r = data.recipes.find(rec=>rec.id===c.dataset.openrecipe);
@@ -1473,8 +1593,7 @@ function seedIfEmpty(){
 /* ============================================================
    INIT
 ============================================================ */
-seedIfEmpty();
-render();
+boot();
 </script>
 </body>
 </html>
