@@ -262,11 +262,52 @@ textarea{min-height:90px; resize:vertical;}
   <div class="modal-sheet" id="modalSheet"></div>
 </div>
 
+<script type="module">
+/* Connexion Firestore — module séparé car le SDK Firebase s'utilise
+   avec des imports ES. Il expose deux fonctions sur window pour que
+   le script principal (classique, plus bas) puisse les appeler. */
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js';
+import { getFirestore, doc, getDoc, setDoc } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js';
+
+const firebaseConfig = {
+  apiKey: 'AIzaSyDZVBzw6L5uO6s5OsrywhPMmYmHHk1IWvs',
+  authDomain: 'menu-8e939.firebaseapp.com',
+  databaseURL: 'https://menu-8e939-default-rtdb.europe-west1.firebasedatabase.app',
+  projectId: 'menu-8e939',
+  storageBucket: 'menu-8e939.firebasestorage.app',
+  messagingSenderId: '984195885838',
+  appId: '1:984195885838:web:9522c6216796071f73c55f'
+};
+
+window.__firestoreEnabled = !!(firebaseConfig.apiKey && firebaseConfig.apiKey !== 'REMPLACE_MOI');
+
+if(window.__firestoreEnabled){
+  try{
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const sharedDoc = doc(db, 'nosmenus', 'famille');
+
+    window.__firestoreWrite = async (payload)=>{
+      await setDoc(sharedDoc, payload);
+    };
+    window.__firestoreRead = async ()=>{
+      const snap = await getDoc(sharedDoc);
+      if(!snap.exists()) throw new Error('Aucune donnée trouvée dans l\u2019espace partagé pour l\u2019instant.');
+      return snap.data();
+    };
+  }catch(e){
+    console.error('Initialisation Firebase impossible', e);
+    window.__firestoreEnabled = false;
+  }
+}
+</script>
+
 <script>
 /* ============================================================
    DONNÉES
 ============================================================ */
 const STORAGE_KEY = 'nosMenusData_v1';
+const SYNC_KEY = 'nosMenusSync_v1';
 const MEAL_TYPES = [
   {key:'petit-dej', label:'Petit-déjeuner'},
   {key:'dejeuner',  label:'Déjeuner'},
@@ -349,6 +390,55 @@ function saveData(){
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   }catch(e){
     console.error('Sauvegarde impossible', e);
+  }
+}
+
+/* ============================================================
+   ESPACE PARTAGÉ (synchronisation à deux via Firestore). La
+   configuration Firebase est intégrée en dur dans le module plus
+   haut : les deux téléphones utilisent donc automatiquement le
+   même espace, sans code à échanger. Les données ne transitent
+   que quand on appuie sur Envoyer / Récupérer dans Réglages : pas
+   de synchro automatique silencieuse, pour éviter qu'un appareil
+   écrase discrètement les modifications de l'autre.
+============================================================ */
+function syncEnabled(){ return !!window.__firestoreEnabled; }
+
+let syncMeta = loadSyncMeta();
+function loadSyncMeta(){
+  try{
+    const raw = localStorage.getItem(SYNC_KEY);
+    return raw ? JSON.parse(raw) : {lastSync:null};
+  }catch(e){ return {lastSync:null}; }
+}
+function saveSyncMeta(){
+  try{ localStorage.setItem(SYNC_KEY, JSON.stringify(syncMeta)); }
+  catch(e){ console.error('Sauvegarde de la config de synchro impossible', e); }
+}
+
+async function pushToCloud(){
+  if(!syncEnabled()){ toast('Espace partagé pas encore configuré.'); return; }
+  try{
+    await window.__firestoreWrite(data);
+    syncMeta.lastSync = new Date().toISOString();
+    saveSyncMeta();
+    toast('Données envoyées vers l\u2019espace partagé.');
+  }catch(e){
+    toast('Échec de l\u2019envoi. Vérifie la connexion internet.');
+  }
+}
+async function pullFromCloud(){
+  if(!syncEnabled()){ toast('Espace partagé pas encore configuré.'); return; }
+  try{
+    const remote = await window.__firestoreRead();
+    data = Object.assign(defaultData(), remote);
+    saveData();
+    syncMeta.lastSync = new Date().toISOString();
+    saveSyncMeta();
+    render();
+    toast('Données récupérées depuis l\u2019espace partagé.');
+  }catch(e){
+    toast('Échec de la récupération : ' + e.message);
   }
 }
 
@@ -1200,12 +1290,33 @@ function attachHistoriqueEvents(){
 /* ============================================================
    RÉGLAGES (export / import / réinitialisation)
 ============================================================ */
+function syncSectionHTML(){
+  if(!syncEnabled()){
+    return `
+    <div class="card">
+      <div class="section-title">Espace partagé (2 personnes)</div>
+      <p class="hint">Pas encore configuré. Une fois le projet Firebase relié, cette section affichera les boutons d\u2019envoi et de récupération.</p>
+    </div>`;
+  }
+  const last = syncMeta.lastSync ? new Date(syncMeta.lastSync).toLocaleString('fr-FR') : 'jamais';
+  return `
+    <div class="card">
+      <div class="section-title">Espace partagé (2 personnes)</div>
+      <p class="hint" style="margin-bottom:10px;">Dernière synchro sur cet appareil : ${last}.</p>
+      <div class="row" style="gap:8px;">
+        <button class="btn btn-primary" style="flex:1;" data-act="sendShared">Envoyer mes données</button>
+        <button class="btn btn-soft" style="flex:1;" data-act="fetchShared">Récupérer les données</button>
+      </div>
+    </div>`;
+}
+
 document.getElementById('settingsBtn').addEventListener('click', ()=>{
   const html = `
     <div class="modal-head"><h2>Réglages</h2><button class="modal-close" data-act="closeModal">&times;</button></div>
+    ${syncSectionHTML()}
     <div class="card">
-      <div class="section-title">Sauvegarde</div>
-      <p class="hint" style="margin-bottom:10px;">Les données restent dans ce navigateur. Sur iPhone, exporte un fichier de sauvegarde de temps en temps pour ne rien perdre.</p>
+      <div class="section-title">Sauvegarde locale (sans connexion)</div>
+      <p class="hint" style="margin-bottom:10px;">Les données restent aussi dans ce navigateur. Exporte un fichier de temps en temps pour ne rien perdre, ou pour transférer manuellement (AirDrop, Messages...).</p>
       <button class="btn btn-soft btn-block" data-act="exportData">Exporter mes données (.json)</button>
       <label class="btn btn-ghost btn-block" style="margin-top:8px; text-align:center;">
         Importer une sauvegarde
@@ -1214,11 +1325,20 @@ document.getElementById('settingsBtn').addEventListener('click', ()=>{
     </div>
     <div class="card">
       <div class="section-title">Réinitialiser</div>
-      <p class="hint" style="margin-bottom:10px;">Efface toutes les recettes, menus, courses, stocks et l\u2019historique.</p>
+      <p class="hint" style="margin-bottom:10px;">Efface toutes les recettes, menus, courses, stocks et l\u2019historique de cet appareil.</p>
       <button class="btn btn-danger btn-block" data-act="resetData">Tout effacer</button>
     </div>
   `;
   openModal(html, sheet=>{
+    function reopenSettings(){ document.getElementById('settingsBtn').click(); }
+    const sendBtn = sheet.querySelector('[data-act="sendShared"]');
+    if(sendBtn) sendBtn.onclick = async ()=>{ await pushToCloud(); reopenSettings(); };
+    const fetchBtn = sheet.querySelector('[data-act="fetchShared"]');
+    if(fetchBtn) fetchBtn.onclick = ()=>{
+      if(confirm('Ceci va remplacer les données de cet appareil par celles de l\u2019espace partagé. Continuer ?')){
+        pullFromCloud().then(reopenSettings);
+      }
+    };
     sheet.querySelector('[data-act="closeModal"]').onclick = closeModal;
     sheet.querySelector('[data-act="exportData"]').onclick = ()=>{
       const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
