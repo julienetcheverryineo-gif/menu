@@ -264,10 +264,11 @@ textarea{min-height:90px; resize:vertical;}
 
 <script type="module">
 /* Connexion Firestore — module séparé car le SDK Firebase s'utilise
-   avec des imports ES. Il expose deux fonctions sur window pour que
-   le script principal (classique, plus bas) puisse les appeler. */
+   avec des imports ES. Il expose des fonctions sur window pour que
+   le script principal (classique, plus bas) puisse les appeler,
+   et prévient ce dernier via l'événement 'firestore-ready'. */
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js';
-import { getFirestore, doc, getDoc, setDoc } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js';
+import { getFirestore, doc, getDoc, setDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js';
 
 const firebaseConfig = {
   apiKey: 'AIzaSyDZVBzw6L5uO6s5OsrywhPMmYmHHk1IWvs',
@@ -295,11 +296,25 @@ if(window.__firestoreEnabled){
       if(!snap.exists()) throw new Error('Aucune donnée trouvée dans l\u2019espace partagé pour l\u2019instant.');
       return snap.data();
     };
+    /* Écoute en temps réel : callback appelé à chaque changement venant
+       du serveur (donc de l'autre téléphone). On ignore les échos de nos
+       propres écritures locales (hasPendingWrites) pour éviter les
+       allers-retours inutiles. */
+    window.__firestoreListen = (onChange)=>{
+      onSnapshot(sharedDoc, (snap)=>{
+        if(snap.metadata.hasPendingWrites) return;
+        if(snap.exists()) onChange(snap.data());
+      }, (err)=>{
+        console.error('Flux temps réel interrompu', err);
+      });
+    };
   }catch(e){
     console.error('Initialisation Firebase impossible', e);
     window.__firestoreEnabled = false;
   }
 }
+window.dispatchEvent(new Event('firestore-ready'));
+
 </script>
 
 <script>
@@ -391,16 +406,16 @@ function saveData(){
   }catch(e){
     console.error('Sauvegarde impossible', e);
   }
+  scheduleCloudPush();
 }
 
 /* ============================================================
-   ESPACE PARTAGÉ (synchronisation à deux via Firestore). La
-   configuration Firebase est intégrée en dur dans le module plus
-   haut : les deux téléphones utilisent donc automatiquement le
-   même espace, sans code à échanger. Les données ne transitent
-   que quand on appuie sur Envoyer / Récupérer dans Réglages : pas
-   de synchro automatique silencieuse, pour éviter qu'un appareil
-   écrase discrètement les modifications de l'autre.
+   ESPACE PARTAGÉ (synchronisation à deux en temps réel, via
+   Firestore). Dès qu'une donnée change ici, elle est envoyée
+   (avec un léger délai pour grouper les modifications rapprochées)
+   et l'autre téléphone la reçoit automatiquement, sans bouton à
+   appuyer. Un indicateur "applyingRemote" évite qu'une donnée
+   reçue soit aussitôt renvoyée en écho.
 ============================================================ */
 function syncEnabled(){ return !!window.__firestoreEnabled; }
 
@@ -416,31 +431,42 @@ function saveSyncMeta(){
   catch(e){ console.error('Sauvegarde de la config de synchro impossible', e); }
 }
 
-async function pushToCloud(){
-  if(!syncEnabled()){ toast('Espace partagé pas encore configuré.'); return; }
+let applyingRemote = false;
+let pushDebounceTimer = null;
+
+function scheduleCloudPush(){
+  if(!syncEnabled() || applyingRemote) return;
+  clearTimeout(pushDebounceTimer);
+  pushDebounceTimer = setTimeout(pushToCloudSilent, 700);
+}
+
+async function pushToCloudSilent(){
   try{
     await window.__firestoreWrite(data);
     syncMeta.lastSync = new Date().toISOString();
     saveSyncMeta();
-    toast('Données envoyées vers l\u2019espace partagé.');
   }catch(e){
-    toast('Échec de l\u2019envoi. Vérifie la connexion internet.');
+    console.error('Envoi automatique échoué', e);
   }
 }
-async function pullFromCloud(){
-  if(!syncEnabled()){ toast('Espace partagé pas encore configuré.'); return; }
-  try{
-    const remote = await window.__firestoreRead();
-    data = Object.assign(defaultData(), remote);
-    saveData();
-    syncMeta.lastSync = new Date().toISOString();
-    saveSyncMeta();
-    render();
-    toast('Données récupérées depuis l\u2019espace partagé.');
-  }catch(e){
-    toast('Échec de la récupération : ' + e.message);
-  }
+
+function applyRemoteUpdate(remoteData){
+  if(JSON.stringify(remoteData) === JSON.stringify(data)) return;
+  applyingRemote = true;
+  data = Object.assign(defaultData(), remoteData);
+  saveData();
+  applyingRemote = false;
+  syncMeta.lastSync = new Date().toISOString();
+  saveSyncMeta();
+  const modalOpen = document.getElementById('modalBackdrop').classList.contains('open');
+  if(!modalOpen) render();
 }
+
+function startRealtimeSync(){
+  if(!syncEnabled()) return;
+  window.__firestoreListen(applyRemoteUpdate);
+}
+window.addEventListener('firestore-ready', startRealtimeSync);
 
 /* ============================================================
    UTILITAIRES DATE
@@ -1295,18 +1321,18 @@ function syncSectionHTML(){
     return `
     <div class="card">
       <div class="section-title">Espace partagé (2 personnes)</div>
-      <p class="hint">Pas encore configuré. Une fois le projet Firebase relié, cette section affichera les boutons d\u2019envoi et de récupération.</p>
+      <p class="hint">Pas encore connecté (vérifie la connexion internet, ou que le fichier ouvert est bien la dernière version).</p>
     </div>`;
   }
-  const last = syncMeta.lastSync ? new Date(syncMeta.lastSync).toLocaleString('fr-FR') : 'jamais';
+  const last = syncMeta.lastSync ? new Date(syncMeta.lastSync).toLocaleString('fr-FR') : 'pas encore';
   return `
     <div class="card">
       <div class="section-title">Espace partagé (2 personnes)</div>
-      <p class="hint" style="margin-bottom:10px;">Dernière synchro sur cet appareil : ${last}.</p>
-      <div class="row" style="gap:8px;">
-        <button class="btn btn-primary" style="flex:1;" data-act="sendShared">Envoyer mes données</button>
-        <button class="btn btn-soft" style="flex:1;" data-act="fetchShared">Récupérer les données</button>
+      <div class="row" style="gap:6px; margin-bottom:8px;">
+        <span class="pill" style="background:var(--primary-wash); color:var(--primary);">● Synchro en temps réel active</span>
       </div>
+      <p class="hint">Tout ce que tu modifies ici apparaît automatiquement sur l\u2019autre téléphone (et inversement), sans rien à appuyer. Dernier échange : ${last}.</p>
+      <button class="btn btn-ghost btn-block" style="margin-top:10px;" data-act="forceSync">Forcer une synchronisation maintenant</button>
     </div>`;
 }
 
@@ -1331,13 +1357,12 @@ document.getElementById('settingsBtn').addEventListener('click', ()=>{
   `;
   openModal(html, sheet=>{
     function reopenSettings(){ document.getElementById('settingsBtn').click(); }
-    const sendBtn = sheet.querySelector('[data-act="sendShared"]');
-    if(sendBtn) sendBtn.onclick = async ()=>{ await pushToCloud(); reopenSettings(); };
-    const fetchBtn = sheet.querySelector('[data-act="fetchShared"]');
-    if(fetchBtn) fetchBtn.onclick = ()=>{
-      if(confirm('Ceci va remplacer les données de cet appareil par celles de l\u2019espace partagé. Continuer ?')){
-        pullFromCloud().then(reopenSettings);
-      }
+    const forceBtn = sheet.querySelector('[data-act="forceSync"]');
+    if(forceBtn) forceBtn.onclick = async ()=>{
+      forceBtn.textContent = 'Envoi...'; forceBtn.disabled = true;
+      await pushToCloudSilent();
+      toast('Synchronisation forcée effectuée.');
+      reopenSettings();
     };
     sheet.querySelector('[data-act="closeModal"]').onclick = closeModal;
     sheet.querySelector('[data-act="exportData"]').onclick = ()=>{
