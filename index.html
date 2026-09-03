@@ -47,9 +47,18 @@ p{margin:0;}
 button{font-family:inherit;}
 input,select,textarea{font-family:inherit;font-size:16px;}
 
+/* ---------- largeur responsive (téléphone -> iPad) ---------- */
+:root{ --app-max-width:640px; }
+@media (min-width:700px){
+  :root{ --app-max-width:900px; }
+}
+@media (min-width:1000px){
+  :root{ --app-max-width:1100px; }
+}
+
 /* ---------- layout shell ---------- */
 #app{
-  max-width:640px;
+  max-width:var(--app-max-width);
   margin:0 auto;
   min-height:100vh;
   padding-bottom:calc(84px + var(--safe-bottom));
@@ -75,11 +84,14 @@ header.topbar .title-block .tagline{font-size:12.5px; color:var(--text-muted); m
 .icon-btn svg{width:19px;height:19px;}
 
 main{padding:16px 16px 8px;}
+@media (min-width:700px){
+  main{padding:22px 32px 12px;}
+}
 
 /* ---------- bottom nav ---------- */
 nav.tabbar{
   position:fixed; left:0; right:0; bottom:0; z-index:30;
-  max-width:640px; margin:0 auto;
+  max-width:var(--app-max-width); margin:0 auto;
   background:var(--surface);
   border-top:1px solid var(--border);
   display:flex;
@@ -87,12 +99,12 @@ nav.tabbar{
   box-shadow:0 -2px 10px rgba(43,40,35,0.05);
 }
 nav.tabbar button{
-  flex:1; border:none; background:none; padding:10px 2px 8px;
-  display:flex; flex-direction:column; align-items:center; gap:4px;
+  flex:1; border:none; background:none; padding:10px 1px 8px;
+  display:flex; flex-direction:column; align-items:center; gap:3px;
   color:var(--text-muted); cursor:pointer;
 }
-nav.tabbar button svg{width:22px;height:22px;}
-nav.tabbar button span{font-size:10.5px; font-weight:500;}
+nav.tabbar button svg{width:20px;height:20px;}
+nav.tabbar button span{font-size:9.5px; font-weight:500;}
 nav.tabbar button.active{color:var(--primary);}
 nav.tabbar button.active svg{transform:translateY(-1px);}
 
@@ -164,6 +176,13 @@ textarea{min-height:90px; resize:vertical;}
 
 /* ---------- recipes ---------- */
 .recipe-card{cursor:pointer;}
+/* Grilles responsives : empilées sur téléphone, plusieurs colonnes sur iPad */
+@media (min-width:700px){
+  .recipe-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:14px; align-items:start;}
+  .recipe-grid .card{margin-bottom:0;}
+  .stock-grid{display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:14px; align-items:start;}
+  .stock-grid .card{margin-bottom:0;}
+}
 .recipe-card .rname{font-size:15.5px; font-weight:600;}
 .type-chip{
   border:1px solid var(--border); background:var(--surface); border-radius:99px; padding:6px 13px;
@@ -204,7 +223,7 @@ textarea{min-height:90px; resize:vertical;}
 }
 .modal-backdrop.open{opacity:1; pointer-events:auto;}
 .modal-sheet{
-  background:var(--bg); width:100%; max-width:640px; max-height:88vh; overflow-y:auto;
+  background:var(--bg); width:100%; max-width:var(--app-max-width); max-height:88vh; overflow-y:auto;
   border-radius:22px 22px 0 0; padding:18px 18px calc(24px + var(--safe-bottom));
   transform:translateY(24px); transition:transform .2s ease;
 }
@@ -266,6 +285,10 @@ textarea{min-height:90px; resize:vertical;}
     <button data-tab="historique">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>
       <span>Historique</span>
+    </button>
+    <button data-tab="decouvrir">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
+      <span>Idées</span>
     </button>
   </nav>
 </div>
@@ -602,7 +625,8 @@ const taglines = {
   recettes: 'Le carnet de la maison',
   courses: 'Ce qu\u2019il faut rapporter',
   stock: 'Ce qu\u2019il y a déjà',
-  historique: 'Ce qu\u2019on a mangé'
+  historique: 'Ce qu\u2019on a mangé',
+  decouvrir: 'Pioché dans le fichier de recettes'
 };
 
 function render(){
@@ -613,6 +637,7 @@ function render(){
   else if(currentTab==='courses') main.innerHTML = renderCoursesTab();
   else if(currentTab==='stock') main.innerHTML = renderStockTab();
   else if(currentTab==='historique') main.innerHTML = renderHistoriqueTab();
+  else if(currentTab==='decouvrir') main.innerHTML = renderDecouvrirTab();
   attachTabEvents();
 }
 
@@ -983,6 +1008,7 @@ function renderRecettesTab(){
       <p>Aucune recette pour l\u2019instant.<br>Ajoute la première recette de la maison.</p>
     </div>`;
   } else {
+    html += `<div class="recipe-grid">`;
     list.forEach(r=>{
       const count = data.historique.filter(h=>h.recipeId===r.id).length;
       html += `<div class="card recipe-card" data-openrecipe="${r.id}">
@@ -998,6 +1024,7 @@ function renderRecettesTab(){
         </div>
       </div>`;
     });
+    html += `</div>`;
   }
   return html;
 }
@@ -1260,7 +1287,7 @@ function attachCoursesEvents(){
    ONGLET STOCK
 ============================================================ */
 function renderStockTab(){
-  let html = '';
+  let html = '<div class="stock-grid">';
   STOCK_ZONES.forEach(zone=>{
     const items = data.stock[zone.key].slice().sort((a,b)=>a.nom.localeCompare(b.nom,'fr'));
     html += `<div class="card">
@@ -1292,6 +1319,7 @@ function renderStockTab(){
       <button class="btn btn-soft btn-block" style="margin-top:8px;" data-addstock="${zone.key}">Ajouter à ${zone.label.toLowerCase()}</button>
     </div>`;
   });
+  html += '</div>';
   return html;
 }
 
@@ -1532,12 +1560,111 @@ function toast(msg){
   toastTimer = setTimeout(()=>{ el.style.transition='opacity .3s'; el.style.opacity='0'; }, 2600);
 }
 
+/* ============================================================
+   ONGLET DÉCOUVRIR (mélange aléatoire de recettes-internet.js)
+============================================================ */
+let discoverOrder = null; // tableau mélangé, régénéré à l'entrée sur l'onglet et via "Mélanger"
+let discoverFilterType = 'all';
+let discoverFilterAirFryer = false;
+
+function shuffleArray(arr){
+  const a = arr.slice();
+  for(let i=a.length-1;i>0;i--){
+    const j = Math.floor(Math.random()*(i+1));
+    [a[i],a[j]] = [a[j],a[i]];
+  }
+  return a;
+}
+
+function renderDecouvrirTab(){
+  if(!discoverOrder) discoverOrder = shuffleArray(INTERNET_RECIPES);
+
+  let list = discoverOrder;
+  if(discoverFilterType!=='all') list = list.filter(r=>r.types.includes(discoverFilterType));
+  if(discoverFilterAirFryer) list = list.filter(r=>r.airFryer);
+
+  let html = `
+    <div class="row wrap" style="margin-bottom:10px;">
+      <button class="type-chip ${discoverFilterType==='all'?'on':''}" data-dfiltertype="all">Toutes</button>
+      ${MEAL_TYPES.map(mt=>`<button class="type-chip ${discoverFilterType===mt.key?'on':''}" data-dfiltertype="${mt.key}">${mt.label}</button>`).join('')}
+    </div>
+    <div class="row wrap" style="margin-bottom:14px; gap:8px;">
+      <button class="type-chip ${discoverFilterAirFryer?'on':''}" data-dfilterairfryer="1">Air fryer uniquement</button>
+    </div>
+    <button class="btn btn-primary btn-block" style="margin-bottom:16px;" data-act="shuffleDiscover">Mélanger à nouveau</button>
+  `;
+
+  if(!INTERNET_RECIPES.length){
+    html += `<div class="empty-state">
+      <p>Le fichier <strong>recettes-internet.js</strong> est introuvable ou vide. Vérifie qu\u2019il est bien dans le même dossier que cette page.</p>
+    </div>`;
+  } else if(!list.length){
+    html += `<div class="empty-state"><p>Aucune recette ne correspond à ce filtre.</p></div>`;
+  } else {
+    html += `<div class="recipe-grid">`;
+    list.forEach((r,i)=>{
+      html += `<div class="card recipe-card" data-opendiscover="${discoverOrder.indexOf(r)}">
+        <div class="row between">
+          <div class="rname">${esc(r.nom)}</div>
+          ${r.calories ? `<div class="pill">${r.calories} kcal</div>` : ''}
+        </div>
+        <div class="row wrap" style="margin-top:8px; gap:6px;">
+          ${r.types.map(t=>{const mt=MEAL_TYPES.find(m=>m.key===t); return mt?`<span class="pill accent">${mt.label}</span>`:'';}).join('')}
+          ${r.airFryer ? `<span class="pill" style="background:var(--internet-wash); color:var(--internet);">Air fryer</span>` : ''}
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+  return html;
+}
+
+function openDiscoverDetail(recipe){
+  const html = `
+    <div class="modal-head"><h2>${esc(recipe.nom)}</h2><button class="modal-close" data-act="closeModal">&times;</button></div>
+    <div class="row wrap" style="gap:6px; margin-bottom:10px;">
+      ${recipe.calories?`<span class="pill">${recipe.calories} kcal</span>`:''}
+      ${recipe.airFryer?`<span class="pill" style="background:var(--internet-wash); color:var(--internet);">Air fryer</span>`:''}
+      ${recipe.types.map(t=>{const mt=MEAL_TYPES.find(m=>m.key===t); return mt?`<span class="pill accent">${mt.label}</span>`:'';}).join('')}
+    </div>
+    <div class="section-title">Ingrédients</div>
+    <div style="margin-bottom:12px;">${(recipe.ingredients||[]).map(i=>`<div style="padding:3px 0; font-size:13.5px;">${esc(i.nom)}${i.quantite||i.unite?` <span class="muted">(${esc([i.quantite,i.unite].filter(Boolean).join(' '))})</span>`:''}</div>`).join('') || '<p class="muted" style="font-size:13px;">Ingrédients non détaillés.</p>'}</div>
+    ${recipe.instructions?`<div class="section-title">Préparation</div><p style="font-size:13.5px; line-height:1.6; margin-bottom:12px;">${esc(recipe.instructions)}</p>`:''}
+    ${recipe.notes?`<p class="hint" style="margin-bottom:12px;">${esc(recipe.notes)}</p>`:''}
+    ${recipe.source?`<p class="hint" style="margin-bottom:14px;">Idée trouvée sur <a href="${recipe.source.url}" target="_blank" rel="noopener" style="color:var(--internet);">${esc(recipe.source.label)}</a>.</p>`:''}
+    <button class="btn btn-primary btn-block" data-act="addToBook">Ajouter à mon carnet</button>
+  `;
+  openModal(html, sheet=>{
+    sheet.querySelector('[data-act="closeModal"]').onclick = closeModal;
+    sheet.querySelector('[data-act="addToBook"]').onclick = ()=>{
+      const saved = ensureRecipeInLibrary(recipe);
+      saveData();
+      closeModal();
+      toast(`${saved.nom} ajoutée à ton carnet.`);
+    };
+  });
+}
+
+function attachDecouvrirEvents(){
+  const main = document.getElementById('main');
+  main.querySelectorAll('[data-dfiltertype]').forEach(b=>b.onclick=()=>{ discoverFilterType=b.dataset.dfiltertype; render(); });
+  main.querySelectorAll('[data-dfilterairfryer]').forEach(b=>b.onclick=()=>{ discoverFilterAirFryer=!discoverFilterAirFryer; render(); });
+  const shuffleBtn = main.querySelector('[data-act="shuffleDiscover"]');
+  if(shuffleBtn) shuffleBtn.onclick = ()=>{ discoverOrder = shuffleArray(INTERNET_RECIPES); render(); };
+  main.querySelectorAll('[data-opendiscover]').forEach(card=>card.onclick=()=>{
+    const idx = Number(card.dataset.opendiscover);
+    const recipe = discoverOrder[idx];
+    if(recipe) openDiscoverDetail(recipe);
+  });
+}
+
 function attachTabEvents(){
   if(currentTab==='menu') attachMenuEvents();
   else if(currentTab==='recettes') attachRecettesEvents();
   else if(currentTab==='courses') attachCoursesEvents();
   else if(currentTab==='stock') attachStockEvents();
   else if(currentTab==='historique') attachHistoriqueEvents();
+  else if(currentTab==='decouvrir') attachDecouvrirEvents();
 }
 
 /* ============================================================
