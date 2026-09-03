@@ -329,6 +329,7 @@ window.dispatchEvent(new Event('firestore-ready'));
 
 </script>
 
+<script src="recettes-internet.js"></script>
 <script>
 /* ============================================================
    DONNÉES
@@ -353,60 +354,11 @@ function uid(){ return 'id-' + Date.now().toString(36) + '-' + Math.random().toS
 /* Petite bibliothèque de recettes glanées sur internet (ingrédients et
    préparation reformulés), utilisée par le bouton « Internet » et par
    le bouton « Depuis le stock ». Chaque recette cite sa source. */
-const INTERNET_RECIPES = [
-  { id:'net-1', nom:'Avocado toast, feta et grenade', types:['petit-dej'], calories:320,
-    ingredients:[{nom:'Pain de seigle',quantite:'2',unite:'tranches'},{nom:'Avocat',quantite:'1',unite:''},{nom:'Feta',quantite:'60',unite:'g'},{nom:'Citron',quantite:'1/2',unite:''},{nom:'Graines de grenade',quantite:'2',unite:'c. à soupe'}],
-    instructions:"Faire dorer les tranches de pain de seigle. Écraser légèrement l'avocat en lamelles et le répartir sur le pain. Émietter la feta par-dessus, arroser d'un filet de jus de citron et parsemer de graines de grenade.",
-    notes:'', source:{label:'Demotivateur Food', url:'https://www.demotivateur.fr/food/15-petits-dejeuners-minceur-et-gourmands-pour-garder-la-ligne-28861'} },
-  { id:'net-2', nom:'Porridge banane et beurre de cacahuète', types:['petit-dej'], calories:380,
-    ingredients:[{nom:'Lait',quantite:'500',unite:'ml'},{nom:'Flocons d\u2019avoine',quantite:'6',unite:'c. à soupe'},{nom:'Banane',quantite:'3',unite:''},{nom:'Sucre non raffiné',quantite:'2',unite:'c. à soupe'},{nom:'Beurre de cacahuète',quantite:'2',unite:'c. à soupe'}],
-    instructions:"Porter le lait et les flocons d'avoine à ébullition en remuant régulièrement, puis baisser le feu. Ajouter deux bananes écrasées et le sucre, laisser épaissir 2 à 3 minutes. Servir avec des rondelles de la banane restante et une cuillerée de beurre de cacahuète.",
-    notes:'', source:{label:'Demotivateur Food', url:'https://www.demotivateur.fr/food/15-petits-dejeuners-minceur-et-gourmands-pour-garder-la-ligne-28861'} },
-  { id:'net-3', nom:'Omelette aux champignons', types:['petit-dej','dejeuner'], calories:210,
-    ingredients:[{nom:'Échalote',quantite:'1',unite:''},{nom:'Ail',quantite:'1',unite:'gousse'},{nom:'Huile d\u2019olive',quantite:'2',unite:'c. à soupe'},{nom:'Champignons',quantite:'115',unite:'g'},{nom:'Persil',quantite:'2',unite:'c. à soupe'},{nom:'Œufs',quantite:'4',unite:''}],
-    instructions:"Faire revenir l'échalote et l'ail émincés dans un peu d'huile d'olive. Ajouter les champignons coupés en lamelles et laisser dorer, puis saler, poivrer et parsemer de persil. Battre les œufs et cuire l'omelette dans le reste d'huile, puis servir avec la poêlée de champignons.",
-    notes:'', source:{label:'Demotivateur Food', url:'https://www.demotivateur.fr/food/15-petits-dejeuners-minceur-et-gourmands-pour-garder-la-ligne-28861'} },
-  { id:'net-4', nom:'Muffins allégés à la poire', types:['petit-dej'], calories:205,
-    ingredients:[{nom:'Farine',quantite:'250',unite:'g'},{nom:'Sucre de coco',quantite:'50',unite:'g'},{nom:'Levure chimique',quantite:'1',unite:'sachet'},{nom:'Compote de poire',quantite:'40',unite:'g'},{nom:'Œufs',quantite:'2',unite:''},{nom:'Lait',quantite:'150',unite:'ml'},{nom:'Raisins secs',quantite:'150',unite:'g'}],
-    instructions:"Mélanger la farine, le sucre de coco et la levure. Ajouter la compote, les œufs et le lait, mélanger jusqu'à obtenir une pâte lisse. Incorporer les raisins secs, verser dans des moules à muffins et cuire environ 25 minutes à 180°C.",
-    notes:'', source:{label:'Demotivateur Food', url:'https://www.demotivateur.fr/food/15-petits-dejeuners-minceur-et-gourmands-pour-garder-la-ligne-28861'} },
-  { id:'net-5', nom:'Toast au saumon fumé et œuf poché', types:['petit-dej'], calories:245,
-    ingredients:[{nom:'Pain complet',quantite:'4',unite:'tranches'},{nom:'Fromage à tartiner 0%',quantite:'4',unite:'c. à soupe'},{nom:'Saumon fumé',quantite:'4',unite:'tranches'},{nom:'Œufs',quantite:'4',unite:''},{nom:'Citron',quantite:'1',unite:''},{nom:'Aneth',quantite:'4',unite:'brins'}],
-    instructions:"Faire griller le pain complet, tartiner de fromage frais puis déposer une tranche de saumon fumé sur chaque toast. Pocher les œufs et les déposer sur les tartines, arroser d'un filet de citron et parsemer d'aneth.",
-    notes:'', source:{label:'Demotivateur Food', url:'https://www.demotivateur.fr/food/15-petits-dejeuners-minceur-et-gourmands-pour-garder-la-ligne-28861'} },
-  { id:'net-6', nom:'Salade de quinoa, poulet et avocat', types:['dejeuner'], calories:380,
-    ingredients:[{nom:'Quinoa cuit',quantite:'80',unite:'g'},{nom:'Blanc de poulet grillé',quantite:'100',unite:'g'},{nom:'Avocat',quantite:'1/2',unite:''},{nom:'Tomates cerises',quantite:'8',unite:''},{nom:'Citron',quantite:'1',unite:'filet'}],
-    instructions:"Mélanger le quinoa cuit avec le blanc de poulet grillé émincé, l'avocat coupé en dés et les tomates cerises. Arroser d'un filet de jus de citron et servir frais.",
-    notes:'', source:{label:'Les Recettes de Norbert', url:'https://lesrecettesdenorbert.com/sante/idee-recette-regime/'} },
-  { id:'net-7', nom:'Pâtes au parmesan et légumes rôtis', types:['dejeuner','diner'], calories:281,
-    ingredients:[{nom:'Pâtes',quantite:'150',unite:'g'},{nom:'Huile d\u2019olive',quantite:'4',unite:'c. à soupe'},{nom:'Asperges',quantite:'100',unite:'g'},{nom:'Tomate',quantite:'1',unite:''},{nom:'Ail',quantite:'1',unite:'gousse'},{nom:'Vinaigre de vin blanc',quantite:'2',unite:'c. à soupe'},{nom:'Parmesan',quantite:'20',unite:'g'}],
-    instructions:"Cuire les pâtes à l'eau bouillante salée avec un peu d'huile d'olive. Pendant ce temps, faire revenir les asperges dans le reste d'huile jusqu'à ce qu'elles soient tendres, ajouter la tomate en morceaux, l'ail haché et le vinaigre de vin blanc. Mélanger avec les pâtes égouttées et parsemer de parmesan.",
-    notes:'', source:{label:'Améliore ta Santé', url:'https://amelioretasante.com/3-recettes-pour-des-diners-faibles-en-calories/'} },
-  { id:'net-8', nom:'Wraps de poulet aux poivrons', types:['dejeuner','diner'], calories:243,
-    ingredients:[{nom:'Tortillas de maïs',quantite:'4',unite:''},{nom:'Blanc de poulet',quantite:'50',unite:'g'},{nom:'Oignon',quantite:'50',unite:'g'},{nom:'Poivron vert',quantite:'100',unite:'g'},{nom:'Poivron rouge',quantite:'100',unite:'g'}],
-    instructions:"Couper les poivrons en lamelles et émincer l'oignon. Les faire revenir dans un peu d'huile d'olive pendant 5 minutes, ajouter le poulet coupé en lamelles et poursuivre la cuisson 5 minutes. Assaisonner, réchauffer les tortillas et garnir avant de rouler.",
-    notes:'', source:{label:'Améliore ta Santé', url:'https://amelioretasante.com/3-recettes-pour-des-diners-faibles-en-calories/'} },
-  { id:'net-9', nom:'Poivron farci au thon et mozzarella', types:['diner'], calories:253,
-    ingredients:[{nom:'Poivron rouge',quantite:'1',unite:''},{nom:'Thon au naturel',quantite:'1',unite:'boîte'},{nom:'Oignon',quantite:'100',unite:'g'},{nom:'Mozzarella light',quantite:'20',unite:'g'}],
-    instructions:"Faire cuire le poivron entier au four à 180°C pendant 45 minutes, puis le laisser tiédir et retirer la peau. Le couper en deux, épépiner et garnir avec le thon émietté mélangé à l'oignon haché, sel et poivre. Saupoudrer de mozzarella et repasser quelques minutes au four en mode gril.",
-    notes:'', source:{label:'Améliore ta Santé', url:'https://amelioretasante.com/3-recettes-pour-des-diners-faibles-en-calories/'} },
-  { id:'net-10', nom:'Wraps œufs brouillés et avocat', types:['petit-dej','dejeuner'], calories:310,
-    ingredients:[{nom:'Œufs',quantite:'6',unite:''},{nom:'Fromage blanc allégé',quantite:'4',unite:'c. à soupe'},{nom:'Beurre',quantite:'1',unite:'noisette'},{nom:'Avocat',quantite:'2',unite:''},{nom:'Citron',quantite:'1',unite:''},{nom:'Tortillas de maïs',quantite:'4',unite:''}],
-    instructions:"Battre les œufs avec le fromage blanc, assaisonner et cuire en œufs brouillés dans une poêle beurrée. Couper les avocats en dés et les arroser de jus de citron. Garnir les tortillas d'œufs brouillés et d'avocat, puis rouler.",
-    notes:'', source:{label:'Demotivateur Food', url:'https://www.demotivateur.fr/food/15-petits-dejeuners-minceur-et-gourmands-pour-garder-la-ligne-28861'} },
-  { id:'net-11', nom:'Brochettes de poulet et légumes à l\u2019air fryer', types:['dejeuner','diner'], calories:228, airFryer:true,
-    ingredients:[{nom:'Poulet (escalope)',quantite:'1',unite:''},{nom:'Courgette',quantite:'50',unite:'g'},{nom:'Poivron',quantite:'1/2',unite:''},{nom:'Tomates cerises',quantite:'50',unite:'g'},{nom:'Oignon rouge',quantite:'1/4',unite:''},{nom:'Ail',quantite:'1/2',unite:'gousse'},{nom:'Paprika fumé',quantite:'1/2',unite:'c. à café'},{nom:'Salade verte',quantite:'2',unite:'poignées'}],
-    instructions:"Couper les poivrons, courgettes et oignon rouge en morceaux. Couper le poulet en cubes. Assaisonner légumes et poulet séparément avec l'ail râpé, le paprika fumé, un filet d'huile d'olive, sel et poivre. Enfiler en alternance sur des piques : poulet, oignon, courgette, tomate cerise, poivron. Cuire au air fryer 10 à 12 minutes à 200°C. Servir avec la salade verte assaisonnée.",
-    notes:"Utensile : air fryer.", source:{label:'Jow', url:'https://jow.fr/fr/recipes/brochettes-de-poulet-et-legumes-au-air-fryer-95c1mceh6xvqefv608fe'} },
-  { id:'net-12', nom:'Poulet et ratatouille à l\u2019air fryer', types:['dejeuner','diner'], calories:318, airFryer:true,
-    ingredients:[{nom:'Poulet (escalope)',quantite:'1',unite:''},{nom:'Mélange de céréales cuites',quantite:'70',unite:'g'},{nom:'Poivron',quantite:'50',unite:'g'},{nom:'Courgette',quantite:'50',unite:'g'},{nom:'Tomate',quantite:'50',unite:'g'},{nom:'Aubergine',quantite:'50',unite:'g'},{nom:'Oignon jaune',quantite:'1/2',unite:''},{nom:'Ail',quantite:'1/2',unite:'gousse'},{nom:'Herbes de Provence',quantite:'1',unite:'pincée'}],
-    instructions:"Couper l'aubergine, la courgette, le poivron et la tomate en dés ; émincer l'oignon et l'ail. Mettre oignon, ail, courgette, poivron et aubergine dans le panier du air fryer avec la moitié des herbes de Provence, un filet d'huile d'olive, sel et poivre. Cuire 20 minutes à 180°C, mélanger, ajouter la tomate et poursuivre 10 minutes. En parallèle, cuire le poulet assaisonné du reste d'herbes 10 à 12 minutes à 200°C. Réchauffer les céréales et servir le tout ensemble.",
-    notes:"Ustensile : air fryer.", source:{label:'Jow', url:'https://jow.fr/fr/recipes/poulet-et-ratatouille-au-air-fryer-93uvb7ry46wp654617r1'} },
-  { id:'net-13', nom:'Poulet à la grecque à l\u2019air fryer', types:['dejeuner','diner'], calories:550, airFryer:true,
-    ingredients:[{nom:'Poulet (haut de cuisse)',quantite:'1',unite:''},{nom:'Pommes de terre',quantite:'250',unite:'g'},{nom:'Tomates cerises',quantite:'100',unite:'g'},{nom:'Feta',quantite:'30',unite:'g'},{nom:'Olives de Kalamata',quantite:'20',unite:'g'},{nom:'Oignon rouge',quantite:'1/4',unite:''},{nom:'Citron jaune',quantite:'1',unite:'quartier'}],
-    instructions:"Couper les pommes de terre en 2 ou 4 selon leur taille, et l'oignon rouge en quartiers fins. Déposer le poulet et les pommes de terre dans le panier du air fryer avec un filet d'huile d'olive, sel et poivre, mélanger et cuire 20 à 25 minutes à 220°C. Ajouter les tomates cerises et poursuivre la cuisson 5 minutes à 220°C. Servir avec les olives coupées grossièrement, la feta émiettée, un filet de citron et quelques herbes fraîches.",
-    notes:"Ustensile : air fryer.", source:{label:'Jow', url:'https://jow.fr/fr/recipes/poulet-a-la-grecque-au-air-fryer-91uriuq34d2o03jr0x51'} }
-];
+/* Bibliothèque de recettes "Internet", chargée depuis le fichier
+   externe recettes-internet.js (à garder dans le même dossier que
+   cette page). Si ce fichier est absent ou pas encore chargé, la
+   liste est simplement vide plutôt que de faire planter l'app. */
+const INTERNET_RECIPES = window.RECETTES_INTERNET || [];
 
 function defaultData(){
   return { recipes: [], menu: {}, stock: {congelateur:[], frigo:[], conserves:[]}, courses: [], historique: [] };
@@ -876,7 +828,6 @@ function renderSuggestionModal(recipe, dateISO, mealKey, mode, coverage){
       render();
     };
     sheet.querySelector('[data-act="rerollSuggestion"]').onclick = ()=>{
-      closeModal();
       if(mode==='internet') openInternetSuggestion(dateISO, mealKey, recipe.nom);
       else openStockSuggestion(dateISO, mealKey, recipe.nom);
     };
