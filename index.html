@@ -693,8 +693,8 @@ function renderMealRow(dateISO, mt){
   const isPastOrToday = dateISO <= todayISO();
   let body;
   if(recipe){
-    body = `<div>
-        <div class="recipe-name">${esc(recipe.nom)}</div>
+    body = `<div class="clickable-recipe" data-viewrecipe="${recipe.id}" style="cursor:pointer;">
+        <div class="recipe-name">${esc(recipe.nom)} <span class="muted" style="font-weight:400;">›</span></div>
         <div class="recipe-kcal">${recipe.calories ? recipe.calories+' kcal' : 'calories non renseignées'}</div>
       </div>`;
   } else {
@@ -708,6 +708,12 @@ function renderMealRow(dateISO, mt){
       <button class="btn btn-stockpick btn-sm" data-act="stock" data-date="${dateISO}" data-meal="${mt.key}">Depuis le stock</button>`;
   if(recipe){
     actions += `<button class="btn btn-ghost btn-sm" data-act="effacer" data-date="${dateISO}" data-meal="${mt.key}">Effacer</button>`;
+    const portionsVal = slot.portions || getBasePortions(recipe);
+    actions += `<label class="row" style="gap:4px; align-items:center;">
+        <span class="muted" style="font-size:12px;">Pour</span>
+        <input type="number" min="1" class="obj-input" style="width:52px;" value="${portionsVal}" data-act="portions" data-date="${dateISO}" data-meal="${mt.key}">
+        <span class="muted" style="font-size:12px;">pers.</span>
+      </label>`;
   }
   actions += `<input type="number" class="obj-input" placeholder="obj. kcal" value="${slot && slot.objectif ? slot.objectif : ''}" data-act="objectif" data-date="${dateISO}" data-meal="${mt.key}">`;
   actions += `</div>`;
@@ -775,6 +781,7 @@ function chooseRandom(dateISO, mealKey){
   const choice = pool[Math.floor(Math.random()*pool.length)].r;
   const slot = ensureSlot(dateISO, mealKey);
   slot.recipeId = choice.id;
+  slot.portions = getBasePortions(choice);
   saveData();
   render();
 }
@@ -880,6 +887,7 @@ function applySuggestion(recipe, dateISO, mealKey, opts){
   const saved = ensureRecipeInLibrary(recipe);
   const slot = ensureSlot(dateISO, mealKey);
   slot.recipeId = saved.id;
+  slot.portions = getBasePortions(saved);
   saveData();
   if(opts.addMissing){
     const cov = stockCoverage(saved);
@@ -905,6 +913,11 @@ function attachMenuEvents(){
   main.querySelectorAll('button[data-act="prevWeek"]').forEach(b=>b.onclick=()=>{weekOffset--; render();});
   main.querySelectorAll('button[data-act="nextWeek"]').forEach(b=>b.onclick=()=>{weekOffset++; render();});
 
+  main.querySelectorAll('[data-viewrecipe]').forEach(el=>el.onclick=()=>{
+    const recipe = data.recipes.find(r=>r.id===el.dataset.viewrecipe);
+    if(recipe) openRecipeDetail(recipe);
+  });
+
   main.querySelectorAll('button[data-act="choisir"]').forEach(b=>b.onclick=()=>{
     const {date, meal} = b.dataset;
     openModal(pickerModalHTML(date, meal), sheet=>{
@@ -913,6 +926,8 @@ function attachMenuEvents(){
         sheet.querySelectorAll('[data-pick]').forEach(el=>el.onclick=()=>{
           const slot = ensureSlot(date, meal);
           slot.recipeId = el.dataset.pick;
+          const picked = data.recipes.find(r=>r.id===el.dataset.pick);
+          if(picked) slot.portions = getBasePortions(picked);
           saveData();
           closeModal();
           render();
@@ -951,6 +966,14 @@ function attachMenuEvents(){
     inp.addEventListener('change', ()=>{
       const slot = ensureSlot(inp.dataset.date, inp.dataset.meal);
       slot.objectif = inp.value ? Number(inp.value) : null;
+      saveData();
+    });
+  });
+
+  main.querySelectorAll('input[data-act="portions"]').forEach(inp=>{
+    inp.addEventListener('change', ()=>{
+      const slot = ensureSlot(inp.dataset.date, inp.dataset.meal);
+      slot.portions = inp.value ? Math.max(1, Number(inp.value)) : null;
       saveData();
     });
   });
@@ -1059,6 +1082,11 @@ function recipeFormHTML(recipe){
         <label class="field-label">Calories (par portion, optionnel)</label>
         <input type="number" id="rf-cal" value="${r.calories||''}" placeholder="Ex. 550">
       </div>
+      <div class="field">
+        <label class="field-label">Nombre de personnes pour ces quantités</label>
+        <input type="number" id="rf-portions" min="1" value="${r.basePortions||''}" placeholder="Ex. 4">
+        <p class="hint" style="margin-top:4px;">Permet d\u2019ajuster automatiquement les quantités à la consultation. Laisse vide si tu ne sais pas — l\u2019app estimera 4 par défaut.</p>
+      </div>
       ${r.source ? `<p class="hint" style="margin-top:-6px; margin-bottom:14px;">Idée trouvée sur <a href="${r.source.url}" target="_blank" rel="noopener" style="color:var(--internet);">${esc(r.source.label)}</a>.</p>` : ''}
       <div class="field">
         <label class="field-label">Ingrédients</label>
@@ -1079,6 +1107,97 @@ function recipeFormHTML(recipe){
       ${r.id?`<button type="button" class="btn btn-danger btn-block" style="margin-top:10px;" data-act="deleteRecipe" data-id="${r.id}">Supprimer la recette</button>`:''}
     </form>
   `;
+}
+
+/* ============================================================
+   CONSULTATION D'UNE RECETTE (avec ajustement du nombre de personnes)
+============================================================ */
+function getBasePortions(recipe){
+  if(recipe.basePortions) return recipe.basePortions;
+  if(recipe.notes){
+    const m = recipe.notes.match(/pour\s+(\d+)\s+(personnes?|parts?|pizzas?|bols?|portions?)/i);
+    if(m) return parseInt(m[1],10);
+  }
+  return 4; // hypothèse par défaut si la source ne précise rien
+}
+
+function parseQtyNumber(str){
+  if(!str) return null;
+  str = String(str).trim();
+  const mixed = str.match(/^(\d+)\s+(\d+)\s*\/\s*(\d+)$/);
+  if(mixed) return parseInt(mixed[1],10) + parseInt(mixed[2],10)/parseInt(mixed[3],10);
+  const frac = str.match(/^(\d+)\s*\/\s*(\d+)$/);
+  if(frac) return parseInt(frac[1],10)/parseInt(frac[2],10);
+  const num = parseFloat(str.replace(',','.'));
+  return isNaN(num) ? null : num;
+}
+
+function formatQtyNumber(n){
+  const rounded = Math.round(n*100)/100;
+  const intPart = Math.floor(rounded + 1e-9);
+  const frac = rounded - intPart;
+  const niceFracs = [[0.25,'1/4'],[0.33,'1/3'],[0.5,'1/2'],[0.67,'2/3'],[0.75,'3/4']];
+  for(const [val,label] of niceFracs){
+    if(Math.abs(frac-val) < 0.04){
+      return (intPart>0 ? intPart+' ' : '') + label;
+    }
+  }
+  const trimmed = Math.round(rounded*10)/10;
+  return String(trimmed);
+}
+
+function scaleQtyStr(qtyStr, factor){
+  if(!qtyStr || factor===1) return qtyStr;
+  const n = parseQtyNumber(qtyStr);
+  if(n===null) return qtyStr;
+  return formatQtyNumber(n*factor);
+}
+
+function openRecipeDetail(recipe){
+  const base = getBasePortions(recipe);
+  const estimated = !recipe.basePortions && !(recipe.notes && /pour\s+\d+\s+(personnes?|parts?|pizzas?|bols?|portions?)/i.test(recipe.notes));
+  let current = base;
+
+  function html(){
+    const factor = current/base;
+    const ingHtml = (recipe.ingredients||[]).length ? recipe.ingredients.map(i=>{
+      const scaled = scaleQtyStr(i.quantite, factor);
+      const qtyUnit = [scaled, i.unite].filter(Boolean).join(' ');
+      return `<div style="padding:3px 0; font-size:13.5px;">${esc(i.nom)}${qtyUnit?` <span class="muted">(${esc(qtyUnit)})</span>`:''}</div>`;
+    }).join('') : '<p class="muted" style="font-size:13px;">Ingrédients non détaillés.</p>';
+
+    return `
+      <div class="modal-head"><h2>${esc(recipe.nom)}</h2><button class="modal-close" data-act="closeModal">&times;</button></div>
+      <div class="row wrap" style="gap:6px; margin-bottom:12px;">
+        ${recipe.calories?`<span class="pill">${recipe.calories} kcal</span>`:''}
+        ${recipe.airFryer?`<span class="pill" style="background:var(--internet-wash); color:var(--internet);">Air fryer</span>`:''}
+        ${(recipe.types||[]).map(t=>{const mt=MEAL_TYPES.find(m=>m.key===t); return mt?`<span class="pill accent">${mt.label}</span>`:'';}).join('')}
+      </div>
+      <div class="row" style="align-items:center; gap:12px; margin-bottom:6px;">
+        <span class="section-title" style="margin-bottom:0;">Portions</span>
+        <div class="stepper">
+          <button data-act="decServ">−</button>
+          <span style="min-width:26px; text-align:center; font-weight:600;">${current}</span>
+          <button data-act="incServ">+</button>
+        </div>
+      </div>
+      ${estimated ? `<p class="hint" style="margin-bottom:14px;">Nombre de base estimé (non précisé par la source) — les quantités ci-dessous sont donc approximatives.</p>` : `<p class="hint" style="margin-bottom:14px;">Quantités recalculées depuis une recette prévue pour ${base}.</p>`}
+      <div class="section-title">Ingrédients</div>
+      <div style="margin-bottom:12px;">${ingHtml}</div>
+      ${recipe.instructions?`<div class="section-title">Préparation</div><p style="font-size:13.5px; line-height:1.6; margin-bottom:12px;">${esc(recipe.instructions)}</p>`:''}
+      ${recipe.source?`<p class="hint" style="margin-bottom:14px;">${recipe.source.url?`Idée trouvée sur <a href="${esc(recipe.source.url)}" target="_blank" rel="noopener" style="color:var(--internet);">${esc(recipe.source.label)}</a>.`:`Source : ${esc(recipe.source.label)}`}</p>`:''}
+      <button class="btn btn-soft btn-block" data-act="editRecipe">Modifier cette recette</button>
+    `;
+  }
+
+  function wire(sheet){
+    sheet.querySelector('[data-act="closeModal"]').onclick = closeModal;
+    sheet.querySelector('[data-act="decServ"]').onclick = ()=>{ if(current>1){ current--; openModal(html(), wire); } };
+    sheet.querySelector('[data-act="incServ"]').onclick = ()=>{ current++; openModal(html(), wire); };
+    sheet.querySelector('[data-act="editRecipe"]').onclick = ()=>{ openRecipeForm(recipe); };
+  }
+
+  openModal(html(), wire);
 }
 
 function openRecipeForm(recipe){
@@ -1133,6 +1252,7 @@ function openRecipeForm(recipe){
         nom,
         types: Array.from(selectedTypes),
         calories: sheet.querySelector('#rf-cal').value ? Number(sheet.querySelector('#rf-cal').value) : null,
+        basePortions: sheet.querySelector('#rf-portions').value ? Number(sheet.querySelector('#rf-portions').value) : null,
         ingredients,
         instructions: sheet.querySelector('#rf-instr').value.trim(),
         notes: sheet.querySelector('#rf-notes').value.trim(),
@@ -1163,7 +1283,7 @@ function attachRecettesEvents(){
   main.querySelectorAll('[data-act="newRecipe"]').forEach(b=>b.onclick=()=>openRecipeForm(null));
   main.querySelectorAll('[data-openrecipe]').forEach(c=>c.onclick=()=>{
     const r = data.recipes.find(rec=>rec.id===c.dataset.openrecipe);
-    openRecipeForm(r);
+    openRecipeDetail(r);
   });
 }
 
@@ -1223,11 +1343,15 @@ function generateCourses(){
       if(slot && slot.recipeId){
         const recipe = data.recipes.find(r=>r.id===slot.recipeId);
         if(recipe){
+          const base = getBasePortions(recipe);
+          const wanted = slot.portions || base;
+          const factor = wanted / base;
           recipe.ingredients.forEach(ing=>{
             const key = ing.nom.trim().toLowerCase();
             if(!key) return;
             if(!needed[key]) needed[key] = {nom: ing.nom.trim(), qtys: []};
-            const q = [ing.quantite, ing.unite].filter(Boolean).join(' ');
+            const scaledQty = scaleQtyStr(ing.quantite, factor);
+            const q = [scaledQty, ing.unite].filter(Boolean).join(' ');
             if(q) needed[key].qtys.push(q);
           });
         }
