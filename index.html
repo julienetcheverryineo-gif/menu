@@ -734,25 +734,46 @@ function renderMealRow(dateISO, mt){
     </div>`;
 }
 
-function pickerListHTML(mealKey, airFryerOnly){
-  let candidates = data.recipes.filter(r=>r.types.includes(mealKey));
-  if(airFryerOnly) candidates = candidates.filter(r=>r.airFryer);
-  return candidates.length ? candidates.map(r=>`
-      <div class="stock-item" style="cursor:pointer" data-pick="${r.id}">
-        <div>
-          <div class="sname">${esc(r.nom)}</div>
-          <div class="sqty">${r.calories?r.calories+' kcal':'—'}${r.airFryer?' · Air fryer':''}</div>
-        </div>
-        <span class="muted">›</span>
-      </div>`).join('') : `<div class="empty-state"><p>Aucune recette${airFryerOnly?' à air fryer':''} enregistrée pour ce repas pour l\u2019instant. Ajoute-en depuis l\u2019onglet Recettes.</p></div>`;
+function pickerCandidates(mealKey, source, airFryerOnly, search){
+  let list = (source==='internet' ? INTERNET_RECIPES : data.recipes).slice();
+  list = list.filter(r=>r.types && r.types.includes(mealKey));
+  if(airFryerOnly) list = list.filter(r=>r.airFryer);
+  if(search && search.trim()){
+    const s = search.trim().toLowerCase();
+    list = list.filter(r=>r.nom.toLowerCase().includes(s));
+  }
+  list.sort((a,b)=>a.nom.localeCompare(b.nom,'fr'));
+  return list;
 }
 
-function pickerModalHTML(dateISO, mealKey){
+function pickerListHTML(list, source){
+  if(!list.length){
+    return `<div class="empty-state"><p>${source==='internet' ? 'Aucune recette trouvée dans la bibliothèque internet pour ce repas.' : 'Aucune recette enregistrée pour ce repas pour l\u2019instant. Ajoute-en depuis l\u2019onglet Recettes, ou bascule sur « Internet ».'}</p></div>`;
+  }
+  return list.map((r,i)=>`
+      <div class="stock-item" style="cursor:pointer" data-pickidx="${i}">
+        <div>
+          <div class="sname">${esc(r.nom)}</div>
+          <div class="sqty">${r.calories?r.calories+' kcal':'—'}${r.airFryer?' · Air fryer':''}${source==='internet'?' · Internet':''}</div>
+        </div>
+        <span class="muted">›</span>
+      </div>`).join('');
+}
+
+function pickerModalHTML(){
   return `<div class="modal-head"><h2>Choisir une recette</h2><button class="modal-close" data-act="closeModal">&times;</button></div>
+    <div class="row wrap" style="margin-bottom:10px; gap:6px;">
+      <button type="button" class="type-chip on" id="pickerSourcePerso">Mes recettes</button>
+      <button type="button" class="type-chip" id="pickerSourceInternet">Internet</button>
+    </div>
+    <div class="search-box">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <input type="text" id="pickerSearchInput" placeholder="Chercher une recette">
+    </div>
     <div class="row wrap" style="margin-bottom:12px;">
       <button type="button" class="type-chip" id="pickerAirFryerToggle">Air fryer uniquement</button>
     </div>
-    <div id="pickerList">${pickerListHTML(mealKey, false)}</div>`;
+    <div id="pickerList"></div>`;
 }
 
 function chooseRandom(dateISO, mealKey){
@@ -920,27 +941,46 @@ function attachMenuEvents(){
 
   main.querySelectorAll('button[data-act="choisir"]').forEach(b=>b.onclick=()=>{
     const {date, meal} = b.dataset;
-    openModal(pickerModalHTML(date, meal), sheet=>{
-      let airFryerOnly = false;
-      function wirePicks(){
-        sheet.querySelectorAll('[data-pick]').forEach(el=>el.onclick=()=>{
-          const slot = ensureSlot(date, meal);
-          slot.recipeId = el.dataset.pick;
-          const picked = data.recipes.find(r=>r.id===el.dataset.pick);
-          if(picked) slot.portions = getBasePortions(picked);
-          saveData();
-          closeModal();
-          render();
-        });
-      }
-      wirePicks();
+    let source = 'perso';
+    let airFryerOnly = false;
+    let search = '';
+    let currentList = [];
+
+    function refreshList(sheet){
+      currentList = pickerCandidates(meal, source, airFryerOnly, search);
+      sheet.querySelector('#pickerList').innerHTML = pickerListHTML(currentList, source);
+      wirePicks(sheet);
+    }
+    function wirePicks(sheet){
+      sheet.querySelectorAll('[data-pickidx]').forEach(el=>el.onclick=()=>{
+        const chosen = currentList[Number(el.dataset.pickidx)];
+        if(!chosen) return;
+        const slot = ensureSlot(date, meal);
+        const saved = source==='internet' ? ensureRecipeInLibrary(chosen) : chosen;
+        slot.recipeId = saved.id;
+        slot.portions = getBasePortions(saved);
+        saveData();
+        closeModal();
+        render();
+      });
+    }
+
+    openModal(pickerModalHTML(), sheet=>{
+      sheet.querySelector('[data-act="closeModal"]').onclick = closeModal;
+      const persoBtn = sheet.querySelector('#pickerSourcePerso');
+      const internetBtn = sheet.querySelector('#pickerSourceInternet');
+      persoBtn.onclick = ()=>{ source='perso'; persoBtn.classList.add('on'); internetBtn.classList.remove('on'); refreshList(sheet); };
+      internetBtn.onclick = ()=>{ source='internet'; internetBtn.classList.add('on'); persoBtn.classList.remove('on'); refreshList(sheet); };
       sheet.querySelector('#pickerAirFryerToggle').onclick = (e)=>{
         airFryerOnly = !airFryerOnly;
         e.target.classList.toggle('on');
-        sheet.querySelector('#pickerList').innerHTML = pickerListHTML(meal, airFryerOnly);
-        wirePicks();
+        refreshList(sheet);
       };
-      sheet.querySelector('[data-act="closeModal"]').onclick = closeModal;
+      sheet.querySelector('#pickerSearchInput').addEventListener('input', (e)=>{
+        search = e.target.value;
+        refreshList(sheet);
+      });
+      refreshList(sheet);
     });
   });
 
