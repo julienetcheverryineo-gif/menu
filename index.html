@@ -736,7 +736,9 @@ function renderMealRow(dateISO, mt){
 
 function pickerCandidates(mealKey, source, airFryerOnly, search){
   let list = (source==='internet' ? INTERNET_RECIPES : data.recipes).slice();
-  list = list.filter(r=>r.types && r.types.includes(mealKey));
+  if(source!=='internet'){
+    list = list.filter(r=>r.types && r.types.includes(mealKey));
+  }
   if(airFryerOnly) list = list.filter(r=>r.airFryer);
   if(search && search.trim()){
     const s = search.trim().toLowerCase();
@@ -748,16 +750,18 @@ function pickerCandidates(mealKey, source, airFryerOnly, search){
 
 function pickerListHTML(list, source){
   if(!list.length){
-    return `<div class="empty-state"><p>${source==='internet' ? 'Aucune recette trouvée dans la bibliothèque internet pour ce repas.' : 'Aucune recette enregistrée pour ce repas pour l\u2019instant. Ajoute-en depuis l\u2019onglet Recettes, ou bascule sur « Internet ».'}</p></div>`;
+    return `<div class="empty-state"><p>${source==='internet' ? 'Aucune recette trouvée dans la bibliothèque internet.' : 'Aucune recette enregistrée pour ce repas pour l\u2019instant. Ajoute-en depuis l\u2019onglet Recettes, ou bascule sur « Internet ».'}</p></div>`;
   }
-  return list.map((r,i)=>`
-      <div class="stock-item" style="cursor:pointer" data-pickidx="${i}">
+  return list.map((r,i)=>{
+    const typesLabel = source==='internet' ? (r.types||[]).map(t=>{const mt=MEAL_TYPES.find(m=>m.key===t); return mt?mt.label:'';}).filter(Boolean).join(', ') : '';
+    return `<div class="stock-item" style="cursor:pointer" data-pickidx="${i}">
         <div>
           <div class="sname">${esc(r.nom)}</div>
-          <div class="sqty">${r.calories?r.calories+' kcal':'—'}${r.airFryer?' · Air fryer':''}${source==='internet'?' · Internet':''}</div>
+          <div class="sqty">${r.calories?r.calories+' kcal':'—'}${r.airFryer?' · Air fryer':''}${typesLabel?' · '+esc(typesLabel):''}</div>
         </div>
         <span class="muted">›</span>
-      </div>`).join('');
+      </div>`;
+  }).join('');
 }
 
 function pickerModalHTML(){
