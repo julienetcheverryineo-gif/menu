@@ -798,23 +798,34 @@ function pickerModalHTML(){
         <button type="button" class="type-chip" id="pickerLightToggle">Light uniquement</button>
       </div>
     </div>
+    <div class="search-box" id="pickerStockSearchBox" style="display:none; margin-bottom:10px;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <input type="text" id="pickerStockSearchInput" placeholder="Chercher un article du stock">
+    </div>
     <div id="pickerList"></div>`;
 }
 
-function stockItemsFlat(){
+function stockItemsFlat(search){
   let items = [];
   STOCK_ZONES.forEach(z=>{
     data.stock[z.key].filter(s=>Number(s.quantite)>0).forEach(s=>{
       items.push({zone:z.key, zoneLabel:z.label, id:s.id, nom:s.nom, quantite:s.quantite, unite:s.unite});
     });
   });
+  if(search && search.trim()){
+    const s = search.trim().toLowerCase();
+    items = items.filter(it=>it.nom.toLowerCase().includes(s));
+  }
+  items.sort((a,b)=>a.nom.localeCompare(b.nom,'fr'));
   return items;
 }
 
-function stockPickerHTML(selectedSet){
-  const items = stockItemsFlat();
+function stockPickerHTML(selectedSet, search){
+  const items = stockItemsFlat(search);
   if(!items.length){
-    return `<div class="empty-state"><p>Ton stock est vide pour l\u2019instant. Ajoute des articles depuis l\u2019onglet Stock.</p></div>`;
+    const msg = search && search.trim() ? 'Aucun article du stock ne correspond à cette recherche.' : 'Ton stock est vide pour l\u2019instant. Ajoute des articles depuis l\u2019onglet Stock.';
+    return `<div class="empty-state"><p>${msg}</p></div>
+      <button class="btn btn-primary btn-block" data-act="validateStockMeal">Utiliser pour ce repas</button>`;
   }
   const rows = items.map(it=>{
     const key = it.zone+':'+it.id;
@@ -829,40 +840,74 @@ function stockPickerHTML(selectedSet){
         </div>
       </label>`;
   }).join('');
-  return `<p class="hint" style="margin-bottom:10px;">Coche ce que tu utilises ce soir, même sans recette — ça sera décompté du stock.</p>
+  return `<p class="hint" style="margin-bottom:10px;">Coche ce que tu utilises ce soir, même sans recette — ça sera décompté du stock. Décoche pour retirer et recréditer.</p>
     <div style="margin-bottom:12px;">${rows}</div>
     <button class="btn btn-primary btn-block" data-act="validateStockMeal">Utiliser pour ce repas</button>`;
 }
 
-function createStockMeal(selectedKeys, dateISO, mealKey){
-  const chosenItems = [];
-  selectedKeys.forEach(key=>{
-    const [zone, id] = key.split(':');
-    const item = data.stock[zone] && data.stock[zone].find(s=>s.id===id);
-    if(item) chosenItems.push({zone, item});
-  });
-  if(!chosenItems.length) return;
-  const recipe = {
-    id: uid(),
-    nom: chosenItems.map(c=>c.item.nom).join(', '),
-    types: [mealKey],
-    calories: null,
-    airFryer: false,
-    batchCooking: false,
-    light: false,
-    basePortions: 1,
-    ingredients: chosenItems.map(c=>({nom:c.item.nom, quantite:'1', unite:c.item.unite||''})),
-    instructions: '',
-    notes: 'Repas improvisé à partir du stock (pas une vraie recette).',
-    source: null
-  };
-  data.recipes.push(recipe);
-  chosenItems.forEach(c=>{ c.item.quantite = Math.max(0, Number(c.item.quantite) - 1); });
+/* Applique la sélection courante d'articles du stock à un repas.
+   Compare avec la sélection précédente (si ce repas venait déjà du
+   stock) pour ne décompter que les nouveaux ajouts et recréditer ce
+   qui a été retiré, plutôt que de tout re-décompter aveuglément. */
+function applyStockMealSelection(selectedKeys, dateISO, mealKey){
   const slot = ensureSlot(dateISO, mealKey);
-  slot.recipeId = recipe.id;
-  slot.portions = 1;
+  const existingRecipe = slot.recipeId ? data.recipes.find(r=>r.id===slot.recipeId) : null;
+  const previousKeys = (existingRecipe && existingRecipe.stockOrigin) ? existingRecipe.stockOrigin.map(o=>o.zone+':'+o.id) : [];
+  const prevSet = new Set(previousKeys);
+  const newSet = new Set(selectedKeys);
+
+  previousKeys.forEach(key=>{
+    if(!newSet.has(key)){
+      const [zone,id] = key.split(':');
+      const item = data.stock[zone] && data.stock[zone].find(s=>s.id===id);
+      if(item) item.quantite = Number(item.quantite) + 1;
+    }
+  });
+  selectedKeys.forEach(key=>{
+    if(!prevSet.has(key)){
+      const [zone,id] = key.split(':');
+      const item = data.stock[zone] && data.stock[zone].find(s=>s.id===id);
+      if(item) item.quantite = Math.max(0, Number(item.quantite) - 1);
+    }
+  });
+
+  if(!selectedKeys.length){
+    if(existingRecipe && existingRecipe.stockOrigin){
+      slot.recipeId = null;
+      slot.realise = false;
+    }
+    saveData();
+    toast('Sélection vidée : stock recrédité.');
+    return;
+  }
+
+  const chosen = selectedKeys.map(key=>{
+    const [zone,id] = key.split(':');
+    const item = data.stock[zone] && data.stock[zone].find(s=>s.id===id);
+    return item ? {zone, id, nom:item.nom, unite:item.unite} : null;
+  }).filter(Boolean);
+
+  const nom = chosen.map(c=>c.nom).join(', ');
+  const ingredients = chosen.map(c=>({nom:c.nom, quantite:'1', unite:c.unite||''}));
+  const stockOrigin = chosen.map(c=>({zone:c.zone, id:c.id}));
+
+  if(existingRecipe && existingRecipe.stockOrigin){
+    existingRecipe.nom = nom;
+    existingRecipe.ingredients = ingredients;
+    existingRecipe.stockOrigin = stockOrigin;
+  } else {
+    const recipe = {
+      id: uid(), nom, types:[mealKey], calories:null, airFryer:false, batchCooking:false, light:false,
+      basePortions:1, ingredients, instructions:'',
+      notes:'Repas improvisé à partir du stock (pas une vraie recette).',
+      source:null, stockOrigin
+    };
+    data.recipes.push(recipe);
+    slot.recipeId = recipe.id;
+    slot.portions = 1;
+  }
   saveData();
-  toast(`« ${recipe.nom} » ajouté au menu · ${chosenItems.length} article(s) décompté(s) du stock.`);
+  toast(`« ${nom} » enregistré · stock ajusté.`);
 }
 
 function chooseRandom(dateISO, mealKey){
@@ -1057,15 +1102,24 @@ function attachMenuEvents(){
     let search = '';
     let currentList = [];
     let selectedStockItems = new Set();
+    const preSlot = getSlot(date, meal);
+    const preRecipe = preSlot && preSlot.recipeId ? data.recipes.find(r=>r.id===preSlot.recipeId) : null;
+    if(preRecipe && preRecipe.stockOrigin){
+      preRecipe.stockOrigin.forEach(o=>selectedStockItems.add(o.zone+':'+o.id));
+    }
+    let stockSearch = '';
 
     function refreshList(sheet){
       const filtersBox = sheet.querySelector('#pickerRecipeFilters');
+      const stockSearchBox = sheet.querySelector('#pickerStockSearchBox');
       if(source==='stock'){
         filtersBox.style.display = 'none';
-        sheet.querySelector('#pickerList').innerHTML = stockPickerHTML(selectedStockItems);
+        stockSearchBox.style.display = '';
+        sheet.querySelector('#pickerList').innerHTML = stockPickerHTML(selectedStockItems, stockSearch);
         wireStockChecks(sheet);
       } else {
         filtersBox.style.display = '';
+        stockSearchBox.style.display = 'none';
         currentList = pickerCandidates(meal, source, airFryerOnly, batchCookingOnly, lightOnly, search);
         sheet.querySelector('#pickerList').innerHTML = pickerListHTML(currentList, source);
         wirePicks(sheet);
@@ -1093,8 +1147,7 @@ function attachMenuEvents(){
       });
       const validateBtn = sheet.querySelector('[data-act="validateStockMeal"]');
       if(validateBtn) validateBtn.onclick = ()=>{
-        if(!selectedStockItems.size){ toast('Coche au moins un article du stock.'); return; }
-        createStockMeal(Array.from(selectedStockItems), date, meal);
+        applyStockMealSelection(Array.from(selectedStockItems), date, meal);
         closeModal();
         render();
       };
@@ -1133,6 +1186,11 @@ function attachMenuEvents(){
         search = e.target.value;
         refreshList(sheet);
       });
+      sheet.querySelector('#pickerStockSearchInput').addEventListener('input', (e)=>{
+        stockSearch = e.target.value;
+        sheet.querySelector('#pickerList').innerHTML = stockPickerHTML(selectedStockItems, stockSearch);
+        wireStockChecks(sheet);
+      });
       refreshList(sheet);
     });
   });
@@ -1151,6 +1209,14 @@ function attachMenuEvents(){
 
   main.querySelectorAll('button[data-act="effacer"]').forEach(b=>b.onclick=()=>{
     const slot = ensureSlot(b.dataset.date, b.dataset.meal);
+    const recipe = slot.recipeId ? data.recipes.find(r=>r.id===slot.recipeId) : null;
+    if(recipe && recipe.stockOrigin){
+      recipe.stockOrigin.forEach(o=>{
+        const item = data.stock[o.zone] && data.stock[o.zone].find(s=>s.id===o.id);
+        if(item) item.quantite = Number(item.quantite) + 1;
+      });
+      toast('Repas effacé, stock recrédité.');
+    }
     slot.recipeId = null; slot.realise = false;
     saveData(); render();
   });
