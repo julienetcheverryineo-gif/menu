@@ -805,11 +805,16 @@ function pickerModalHTML(){
     <div id="pickerList"></div>`;
 }
 
-function stockItemsFlat(search){
+function stockItemsFlat(search, selectedSet){
   let items = [];
   STOCK_ZONES.forEach(z=>{
-    data.stock[z.key].filter(s=>Number(s.quantite)>0).forEach(s=>{
-      items.push({zone:z.key, zoneLabel:z.label, id:s.id, nom:s.nom, quantite:s.quantite, unite:s.unite});
+    data.stock[z.key].forEach(s=>{
+      const key = z.key+':'+s.id;
+      const hasQty = Number(s.quantite) > 0;
+      const isSelected = !!(selectedSet && selectedSet.has(key));
+      if(hasQty || isSelected){
+        items.push({zone:z.key, zoneLabel:z.label, id:s.id, nom:s.nom, quantite:s.quantite, unite:s.unite, zeroButSelected: !hasQty && isSelected});
+      }
     });
   });
   if(search && search.trim()){
@@ -821,7 +826,7 @@ function stockItemsFlat(search){
 }
 
 function stockPickerHTML(selectedSet, search){
-  const items = stockItemsFlat(search);
+  const items = stockItemsFlat(search, selectedSet);
   if(!items.length){
     const msg = search && search.trim() ? 'Aucun article du stock ne correspond à cette recherche.' : 'Ton stock est vide pour l\u2019instant. Ajoute des articles depuis l\u2019onglet Stock.';
     return `<div class="empty-state"><p>${msg}</p></div>
@@ -830,12 +835,13 @@ function stockPickerHTML(selectedSet, search){
   const rows = items.map(it=>{
     const key = it.zone+':'+it.id;
     const checked = selectedSet.has(key) ? 'checked' : '';
+    const qtyLabel = it.zeroButSelected ? 'qté 0 · déjà utilisé, décoche pour recréditer' : `qté ${esc(String(it.quantite))}`;
     return `<label class="stock-item" style="cursor:pointer;">
         <div class="row" style="gap:10px; align-items:center;">
           <input type="checkbox" data-stockpick="${key}" ${checked} style="width:19px;height:19px; accent-color:var(--primary); flex-shrink:0;">
           <div>
             <div class="sname">${esc(it.nom)}</div>
-            <div class="sqty">${esc(it.zoneLabel)}${it.unite?' · '+esc(it.unite):''} · qté ${esc(String(it.quantite))}</div>
+            <div class="sqty" style="${it.zeroButSelected?'color:var(--accent);':''}">${esc(it.zoneLabel)}${it.unite?' · '+esc(it.unite):''} · ${qtyLabel}</div>
           </div>
         </div>
       </label>`;
