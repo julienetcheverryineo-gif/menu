@@ -785,17 +785,84 @@ function pickerModalHTML(){
     <div class="row wrap" style="margin-bottom:10px; gap:6px;">
       <button type="button" class="type-chip on" id="pickerSourcePerso">Mes recettes</button>
       <button type="button" class="type-chip" id="pickerSourceInternet">Internet</button>
+      <button type="button" class="type-chip" id="pickerSourceStock">Depuis le stock</button>
     </div>
-    <div class="search-box">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-      <input type="text" id="pickerSearchInput" placeholder="Chercher une recette">
-    </div>
-    <div class="row wrap" style="margin-bottom:12px; gap:6px;">
-      <button type="button" class="type-chip" id="pickerAirFryerToggle">Air fryer uniquement</button>
-      <button type="button" class="type-chip" id="pickerBatchCookingToggle">Batch cooking uniquement</button>
-      <button type="button" class="type-chip" id="pickerLightToggle">Light uniquement</button>
+    <div id="pickerRecipeFilters">
+      <div class="search-box">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+        <input type="text" id="pickerSearchInput" placeholder="Chercher une recette">
+      </div>
+      <div class="row wrap" style="margin-bottom:12px; gap:6px;">
+        <button type="button" class="type-chip" id="pickerAirFryerToggle">Air fryer uniquement</button>
+        <button type="button" class="type-chip" id="pickerBatchCookingToggle">Batch cooking uniquement</button>
+        <button type="button" class="type-chip" id="pickerLightToggle">Light uniquement</button>
+      </div>
     </div>
     <div id="pickerList"></div>`;
+}
+
+function stockItemsFlat(){
+  let items = [];
+  STOCK_ZONES.forEach(z=>{
+    data.stock[z.key].filter(s=>Number(s.quantite)>0).forEach(s=>{
+      items.push({zone:z.key, zoneLabel:z.label, id:s.id, nom:s.nom, quantite:s.quantite, unite:s.unite});
+    });
+  });
+  return items;
+}
+
+function stockPickerHTML(selectedSet){
+  const items = stockItemsFlat();
+  if(!items.length){
+    return `<div class="empty-state"><p>Ton stock est vide pour l\u2019instant. Ajoute des articles depuis l\u2019onglet Stock.</p></div>`;
+  }
+  const rows = items.map(it=>{
+    const key = it.zone+':'+it.id;
+    const checked = selectedSet.has(key) ? 'checked' : '';
+    return `<label class="stock-item" style="cursor:pointer;">
+        <div class="row" style="gap:10px; align-items:center;">
+          <input type="checkbox" data-stockpick="${key}" ${checked} style="width:19px;height:19px; accent-color:var(--primary); flex-shrink:0;">
+          <div>
+            <div class="sname">${esc(it.nom)}</div>
+            <div class="sqty">${esc(it.zoneLabel)}${it.unite?' · '+esc(it.unite):''} · qté ${esc(String(it.quantite))}</div>
+          </div>
+        </div>
+      </label>`;
+  }).join('');
+  return `<p class="hint" style="margin-bottom:10px;">Coche ce que tu utilises ce soir, même sans recette — ça sera décompté du stock.</p>
+    <div style="margin-bottom:12px;">${rows}</div>
+    <button class="btn btn-primary btn-block" data-act="validateStockMeal">Utiliser pour ce repas</button>`;
+}
+
+function createStockMeal(selectedKeys, dateISO, mealKey){
+  const chosenItems = [];
+  selectedKeys.forEach(key=>{
+    const [zone, id] = key.split(':');
+    const item = data.stock[zone] && data.stock[zone].find(s=>s.id===id);
+    if(item) chosenItems.push({zone, item});
+  });
+  if(!chosenItems.length) return;
+  const recipe = {
+    id: uid(),
+    nom: chosenItems.map(c=>c.item.nom).join(', '),
+    types: [mealKey],
+    calories: null,
+    airFryer: false,
+    batchCooking: false,
+    light: false,
+    basePortions: 1,
+    ingredients: chosenItems.map(c=>({nom:c.item.nom, quantite:'1', unite:c.item.unite||''})),
+    instructions: '',
+    notes: 'Repas improvisé à partir du stock (pas une vraie recette).',
+    source: null
+  };
+  data.recipes.push(recipe);
+  chosenItems.forEach(c=>{ c.item.quantite = Math.max(0, Number(c.item.quantite) - 1); });
+  const slot = ensureSlot(dateISO, mealKey);
+  slot.recipeId = recipe.id;
+  slot.portions = 1;
+  saveData();
+  toast(`« ${recipe.nom} » ajouté au menu · ${chosenItems.length} article(s) décompté(s) du stock.`);
 }
 
 function chooseRandom(dateISO, mealKey){
@@ -841,14 +908,22 @@ function openInternetSuggestion(dateISO, mealKey, excludeName){
 
 /* ---- Suggestion « Depuis le stock » ---- */
 function stockCoverage(recipe){
-  const allStock = [...data.stock.congelateur, ...data.stock.frigo, ...data.stock.conserves];
-  const stockNames = allStock.filter(s=>Number(s.quantite)>0).map(s=>s.nom.trim().toLowerCase()).filter(Boolean);
+  const zones = ['congelateur','frigo','conserves'];
   let matched = 0;
   const details = (recipe.ingredients||[]).map(ing=>{
     const nameL = ing.nom.trim().toLowerCase();
-    const inStock = !!nameL && stockNames.some(sn=> sn===nameL || sn.includes(nameL) || nameL.includes(sn));
-    if(inStock) matched++;
-    return {nom:ing.nom, quantite:ing.quantite, unite:ing.unite, inStock};
+    let stockRef = null;
+    if(nameL){
+      for(const zone of zones){
+        const item = data.stock[zone].find(s=>{
+          const sn = s.nom.trim().toLowerCase();
+          return Number(s.quantite)>0 && (sn===nameL || sn.includes(nameL) || nameL.includes(sn));
+        });
+        if(item){ stockRef = {zone, id:item.id}; break; }
+      }
+    }
+    if(stockRef) matched++;
+    return {nom:ing.nom, quantite:ing.quantite, unite:ing.unite, inStock: !!stockRef, stockRef};
   });
   return {matched, total: details.length, details};
 }
@@ -935,17 +1010,29 @@ function applySuggestion(recipe, dateISO, mealKey, opts){
   if(opts.addMissing){
     const cov = stockCoverage(saved);
     let added = 0;
-    cov.details.filter(d=>!d.inStock).forEach(ing=>{
+    let decremented = 0;
+    cov.details.forEach(ing=>{
       const nameL = ing.nom.trim().toLowerCase();
       if(!nameL) return;
-      const already = data.courses.some(c=>c.nom.trim().toLowerCase()===nameL);
-      if(!already){
-        data.courses.unshift({id:uid(), nom:ing.nom.trim(), quantite:[ing.quantite,ing.unite].filter(Boolean).join(' '), coche:false, manuel:false});
-        added++;
+      if(ing.inStock && ing.stockRef){
+        const item = data.stock[ing.stockRef.zone].find(s=>s.id===ing.stockRef.id);
+        if(item){
+          item.quantite = Math.max(0, Number(item.quantite) - 1);
+          decremented++;
+        }
+      } else {
+        const already = data.courses.some(c=>c.nom.trim().toLowerCase()===nameL);
+        if(!already){
+          data.courses.unshift({id:uid(), nom:ing.nom.trim(), quantite:[ing.quantite,ing.unite].filter(Boolean).join(' '), coche:false, manuel:false});
+          added++;
+        }
       }
     });
     saveData();
-    toast(added ? `${saved.nom} ajoutée au menu · ${added} ingrédient(s) ajouté(s) aux courses.` : `${saved.nom} ajoutée au menu. Tout est déjà dans ton stock !`);
+    const parts = [`${saved.nom} ajoutée au menu`];
+    if(decremented) parts.push(`${decremented} ingrédient(s) décompté(s) du stock`);
+    if(added) parts.push(`${added} ajouté(s) aux courses`);
+    toast(parts.join(' · ') + '.');
   } else {
     toast(`${saved.nom} ajoutée au menu.`);
   }
@@ -969,11 +1056,20 @@ function attachMenuEvents(){
     let lightOnly = false;
     let search = '';
     let currentList = [];
+    let selectedStockItems = new Set();
 
     function refreshList(sheet){
-      currentList = pickerCandidates(meal, source, airFryerOnly, batchCookingOnly, lightOnly, search);
-      sheet.querySelector('#pickerList').innerHTML = pickerListHTML(currentList, source);
-      wirePicks(sheet);
+      const filtersBox = sheet.querySelector('#pickerRecipeFilters');
+      if(source==='stock'){
+        filtersBox.style.display = 'none';
+        sheet.querySelector('#pickerList').innerHTML = stockPickerHTML(selectedStockItems);
+        wireStockChecks(sheet);
+      } else {
+        filtersBox.style.display = '';
+        currentList = pickerCandidates(meal, source, airFryerOnly, batchCookingOnly, lightOnly, search);
+        sheet.querySelector('#pickerList').innerHTML = pickerListHTML(currentList, source);
+        wirePicks(sheet);
+      }
     }
     function wirePicks(sheet){
       sheet.querySelectorAll('[data-pickidx]').forEach(el=>el.onclick=()=>{
@@ -988,13 +1084,36 @@ function attachMenuEvents(){
         render();
       });
     }
+    function wireStockChecks(sheet){
+      sheet.querySelectorAll('[data-stockpick]').forEach(cb=>{
+        cb.onchange = ()=>{
+          const key = cb.dataset.stockpick;
+          if(cb.checked) selectedStockItems.add(key); else selectedStockItems.delete(key);
+        };
+      });
+      const validateBtn = sheet.querySelector('[data-act="validateStockMeal"]');
+      if(validateBtn) validateBtn.onclick = ()=>{
+        if(!selectedStockItems.size){ toast('Coche au moins un article du stock.'); return; }
+        createStockMeal(Array.from(selectedStockItems), date, meal);
+        closeModal();
+        render();
+      };
+    }
 
     openModal(pickerModalHTML(), sheet=>{
       sheet.querySelector('[data-act="closeModal"]').onclick = closeModal;
       const persoBtn = sheet.querySelector('#pickerSourcePerso');
       const internetBtn = sheet.querySelector('#pickerSourceInternet');
-      persoBtn.onclick = ()=>{ source='perso'; persoBtn.classList.add('on'); internetBtn.classList.remove('on'); refreshList(sheet); };
-      internetBtn.onclick = ()=>{ source='internet'; internetBtn.classList.add('on'); persoBtn.classList.remove('on'); refreshList(sheet); };
+      const stockBtn = sheet.querySelector('#pickerSourceStock');
+      function selectSource(name, btn){
+        source = name;
+        [persoBtn, internetBtn, stockBtn].forEach(b=>b.classList.remove('on'));
+        btn.classList.add('on');
+        refreshList(sheet);
+      }
+      persoBtn.onclick = ()=>selectSource('perso', persoBtn);
+      internetBtn.onclick = ()=>selectSource('internet', internetBtn);
+      stockBtn.onclick = ()=>selectSource('stock', stockBtn);
       sheet.querySelector('#pickerAirFryerToggle').onclick = (e)=>{
         airFryerOnly = !airFryerOnly;
         e.target.classList.toggle('on');
