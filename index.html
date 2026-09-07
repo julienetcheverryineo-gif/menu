@@ -623,6 +623,7 @@ document.getElementById('tabbar').addEventListener('click', e=>{
   currentTab = btn.dataset.tab;
   document.querySelectorAll('nav.tabbar button').forEach(b=>b.classList.toggle('active', b===btn));
   render();
+  window.scrollTo(0, 0);
 });
 
 const taglines = {
