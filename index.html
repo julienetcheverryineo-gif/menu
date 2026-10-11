@@ -324,22 +324,28 @@ if(window.__firestoreEnabled){
   try{
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
-    const sharedDoc = doc(db, 'nosmenus', 'famille');
+    /* Deux sortes de documents dans la collection « nosmenus » :
+       - « commun » : les recettes, partagées entre tous les foyers ;
+       - « <code du foyer> » : menu, stock, courses et historique d'un
+         foyer (le foyer historique s'appelle « famille »).
+       `fields` limite l'écriture à ces champs (ils sont remplacés en
+       entier, le reste du document n'est pas touché). */
+    const docOf = (id)=> doc(db, 'nosmenus', id);
 
-    window.__firestoreWrite = async (payload)=>{
-      await setDoc(sharedDoc, payload);
+    window.__firestoreWrite = async (id, payload, fields)=>{
+      await setDoc(docOf(id), payload, fields ? {mergeFields: fields} : undefined);
     };
-    window.__firestoreRead = async ()=>{
-      const snap = await getDoc(sharedDoc);
-      if(!snap.exists()) throw new Error('Aucune donnée trouvée dans l\u2019espace partagé pour l\u2019instant.');
-      return snap.data();
+    /* Renvoie null si le document n'existe pas encore. */
+    window.__firestoreRead = async (id)=>{
+      const snap = await getDoc(docOf(id));
+      return snap.exists() ? snap.data() : null;
     };
     /* Écoute en temps réel : callback appelé à chaque changement venant
        du serveur (donc de l'autre téléphone). On ignore les échos de nos
        propres écritures locales (hasPendingWrites) pour éviter les
        allers-retours inutiles. */
-    window.__firestoreListen = (onChange)=>{
-      onSnapshot(sharedDoc, (snap)=>{
+    window.__firestoreListen = (id, onChange)=>{
+      onSnapshot(docOf(id), (snap)=>{
         if(snap.metadata.hasPendingWrites) return;
         if(snap.exists()) onChange(snap.data());
       }, (err)=>{
@@ -360,8 +366,41 @@ window.dispatchEvent(new Event('firestore-ready'));
 /* ============================================================
    DONNÉES
 ============================================================ */
-const STORAGE_KEY = 'nosMenusData_v1';
-const SYNC_KEY = 'nosMenusSync_v1';
+/* ---- Foyer : chaque foyer a son menu / stock / courses / historique,
+   les recettes sont communes. Le code vient du lien d'invitation
+   (?foyer=xxx), puis il est mémorisé sur l'appareil. Un appareil qui
+   avait déjà des données avant cette version est le foyer « famille ».
+   Un appareil neuf sans code doit en saisir un (jamais « famille » par
+   défaut, pour ne pas montrer par erreur les données d'un autre foyer). */
+const FOYER_KEY = 'nosMenusFoyer_v1';
+const COMMUN_DOC = 'commun';
+function sanitizeFoyer(s){
+  return String(s||'').toLowerCase().trim().replace(/[^a-z0-9_-]+/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'').slice(0,40);
+}
+function resolveFoyer(){
+  try{
+    const p = new URLSearchParams(location.search).get('foyer');
+    const code = sanitizeFoyer(p);
+    if(code && code !== COMMUN_DOC){
+      try{ localStorage.setItem(FOYER_KEY, code); }catch(e){}
+      try{ history.replaceState(null, '', location.pathname); }catch(e){}
+      return code;
+    }
+  }catch(e){}
+  try{
+    const saved = localStorage.getItem(FOYER_KEY);
+    if(saved) return saved;
+    if(localStorage.getItem('nosMenusData_v1')){
+      localStorage.setItem(FOYER_KEY, 'famille');
+      return 'famille';
+    }
+  }catch(e){}
+  return null;
+}
+const FOYER = resolveFoyer();
+const FOYER_SUFFIX = (FOYER && FOYER !== 'famille') ? '_' + FOYER : '';
+const STORAGE_KEY = 'nosMenusData_v1' + FOYER_SUFFIX;
+const SYNC_KEY = 'nosMenusSync_v1' + FOYER_SUFFIX;
 const MEAL_TYPES = [
   {key:'petit-dej', label:'Petit-déjeuner'},
   {key:'dejeuner',  label:'Déjeuner'},
@@ -435,9 +474,11 @@ function saveSyncMeta(){
 
 let applyingRemote = false;
 let pushDebounceTimer = null;
+let cloudReady = false;        // vrai une fois la 1re lecture faite (évite d'écraser le cloud avec du vide)
+let lastRecipesJSON = null;    // dernier état connu des recettes dans le cloud
 
 function scheduleCloudPush(){
-  if(!syncEnabled() || applyingRemote) return;
+  if(!syncEnabled() || applyingRemote || !cloudReady) return;
   clearTimeout(pushDebounceTimer);
   pushDebounceTimer = setTimeout(pushToCloudSilent, 700);
 }
@@ -458,9 +499,24 @@ function stripUndefinedDeep(value){
   return value;
 }
 
+const FOYER_FIELDS = ['menu','stock','courses','historique'];
+function foyerPart(d){
+  const out = {};
+  FOYER_FIELDS.forEach(k=>{ out[k] = d[k]; });
+  return out;
+}
+
 async function pushToCloudSilent(){
+  if(!cloudReady) return;
   try{
-    await window.__firestoreWrite(stripUndefinedDeep(data));
+    const clean = stripUndefinedDeep(data);
+    await window.__firestoreWrite(FOYER, foyerPart(clean), FOYER_FIELDS);
+    // Les recettes (communes) ne sont envoyées que si elles ont changé.
+    const recipesJSON = JSON.stringify(clean.recipes);
+    if(recipesJSON !== lastRecipesJSON){
+      await window.__firestoreWrite(COMMUN_DOC, {recipes: clean.recipes}, ['recipes']);
+      lastRecipesJSON = recipesJSON;
+    }
     syncMeta.lastSync = new Date().toISOString();
     saveSyncMeta();
   }catch(e){
@@ -468,21 +524,48 @@ async function pushToCloudSilent(){
   }
 }
 
-function applyRemoteUpdate(remoteData){
-  if(JSON.stringify(remoteData) === JSON.stringify(data)) return;
-  applyingRemote = true;
-  data = Object.assign(defaultData(), remoteData);
-  saveData();
-  applyingRemote = false;
-  syncMeta.lastSync = new Date().toISOString();
-  saveSyncMeta();
+function renderIfNoModal(){
   const modalOpen = document.getElementById('modalBackdrop').classList.contains('open');
   if(!modalOpen) render();
 }
 
+/* Mise à jour reçue pour le foyer (menu, stock, courses, historique) */
+function applyRemoteFoyer(remote){
+  const incoming = {
+    menu: remote.menu || {},
+    stock: remote.stock || defaultData().stock,
+    courses: remote.courses || [],
+    historique: remote.historique || []
+  };
+  if(JSON.stringify(incoming) === JSON.stringify(foyerPart(data))) return;
+  applyingRemote = true;
+  Object.assign(data, incoming);
+  saveData();
+  applyingRemote = false;
+  syncMeta.lastSync = new Date().toISOString();
+  saveSyncMeta();
+  renderIfNoModal();
+}
+
+/* Mise à jour reçue pour les recettes communes */
+function applyRemoteCommun(remote){
+  const recipes = remote.recipes || [];
+  const json = JSON.stringify(recipes);
+  lastRecipesJSON = json;
+  if(json === JSON.stringify(data.recipes)) return;
+  applyingRemote = true;
+  data.recipes = recipes;
+  saveData();
+  applyingRemote = false;
+  syncMeta.lastSync = new Date().toISOString();
+  saveSyncMeta();
+  renderIfNoModal();
+}
+
 function startRealtimeSync(){
   if(!syncEnabled()) return;
-  window.__firestoreListen(applyRemoteUpdate);
+  window.__firestoreListen(FOYER, applyRemoteFoyer);
+  window.__firestoreListen(COMMUN_DOC, applyRemoteCommun);
 }
 
 function waitForFirestoreReady(timeoutMs){
@@ -504,22 +587,29 @@ function mergeByKey(localArr, remoteArr, keyFn){
   return Array.from(map.values());
 }
 
-function mergeStates(local, remote){
+/* local : données de l'appareil ; foyerRemote : document du foyer ;
+   communRemote : document des recettes communes (null s'il n'existe
+   pas encore : dans ce cas on reprend les recettes qui étaient jusqu'ici
+   rangées dans le document du foyer historique). */
+function mergeStates(local, foyerRemote, communRemote){
+  foyerRemote = foyerRemote || {};
   const merged = defaultData();
-  merged.recipes = mergeByKey(local.recipes, remote.recipes, r=>r.nom.trim().toLowerCase());
-  merged.historique = mergeByKey(local.historique, remote.historique, h=>h.id);
-  merged.courses = mergeByKey(local.courses, remote.courses, c=>c.id);
+  const recipeKey = r=>r.nom.trim().toLowerCase();
+  const remoteRecipes = communRemote ? (communRemote.recipes||[]) : (foyerRemote.recipes||[]);
+  merged.recipes = mergeByKey(local.recipes, remoteRecipes, recipeKey);
+  merged.historique = mergeByKey(local.historique, foyerRemote.historique, h=>h.id);
+  merged.courses = mergeByKey(local.courses, foyerRemote.courses, c=>c.id);
   merged.stock = {};
   STOCK_ZONES.forEach(z=>{
-    merged.stock[z.key] = mergeByKey((local.stock&&local.stock[z.key])||[], (remote.stock&&remote.stock[z.key])||[], i=>i.id);
+    merged.stock[z.key] = mergeByKey((local.stock&&local.stock[z.key])||[], (foyerRemote.stock&&foyerRemote.stock[z.key])||[], i=>i.id);
   });
   merged.menu = {};
-  const dates = new Set([...Object.keys(local.menu||{}), ...Object.keys(remote.menu||{})]);
+  const dates = new Set([...Object.keys(local.menu||{}), ...Object.keys(foyerRemote.menu||{})]);
   dates.forEach(d=>{
     const dayMerged = {};
     MEAL_TYPES.forEach(mt=>{
       const l = local.menu && local.menu[d] && local.menu[d][mt.key];
-      const r = remote.menu && remote.menu[d] && remote.menu[d][mt.key];
+      const r = foyerRemote.menu && foyerRemote.menu[d] && foyerRemote.menu[d][mt.key];
       const slot = r || l;
       if(slot) dayMerged[mt.key] = slot;
     });
@@ -528,38 +618,64 @@ function mergeStates(local, remote){
   return merged;
 }
 
-/* Premier contact avec l'espace partagé : on lit ce qui existe déjà
-   côté cloud et on FUSIONNE avec les données locales, au lieu de
-   pousser aveuglément les données locales (ce qui écraserait les
-   recettes ajoutées par l'autre personne si ce push arrivait avant
-   d'avoir reçu les siennes). Seul le tout premier appareil à se
-   connecter (aucune donnée cloud du tout) sème les recettes de départ. */
+/* Premier contact avec l'espace partagé : on lit le foyer ET les
+   recettes communes, puis on FUSIONNE avec les données locales au lieu
+   de pousser aveuglément les données locales. Tant que cette lecture
+   n'a pas réussi, rien n'est envoyé (cloudReady) ; en cas d'échec
+   (hors ligne...) on réessaie toutes les 8 secondes. */
 async function initialCloudSync(){
-  if(!syncEnabled()){ seedIfEmpty(); return; }
   try{
-    const remote = await window.__firestoreRead();
+    const [foyerRemote, communRemote] = await Promise.all([
+      window.__firestoreRead(FOYER),
+      window.__firestoreRead(COMMUN_DOC)
+    ]);
     applyingRemote = true;
-    data = mergeStates(data, remote);
+    data = mergeStates(data, foyerRemote, communRemote);
+    if(!communRemote && !data.recipes.length) seedRecipes();
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     applyingRemote = false;
+    lastRecipesJSON = communRemote ? JSON.stringify(communRemote.recipes || []) : null;
     syncMeta.lastSync = new Date().toISOString();
     saveSyncMeta();
+    cloudReady = true;
+    startRealtimeSync();
     scheduleCloudPush(); // renvoie la fusion si elle contenait du nouveau
+    render();
   }catch(e){
-    if(e && e.message && e.message.indexOf('Aucune donnée trouvée') !== -1){
-      seedIfEmpty();
-    } else {
-      console.error('Lecture initiale de l\u2019espace partagé impossible', e);
-    }
+    applyingRemote = false;
+    console.error('Lecture initiale de l’espace partagé impossible, nouvel essai dans 8 s', e);
+    setTimeout(initialCloudSync, 8000);
   }
 }
 
+/* Écran de saisie du code de foyer (appareil neuf, sans lien d'invitation) */
+function askFoyer(){
+  const gate = document.createElement('div');
+  gate.style.cssText = 'position:fixed; inset:0; z-index:9999; background:var(--bg); display:flex; align-items:center; justify-content:center; padding:24px;';
+  gate.innerHTML = `
+    <div class="card" style="max-width:380px; width:100%;">
+      <div class="section-title">Bienvenue sur Nos Menus</div>
+      <p class="hint" style="margin-bottom:12px;">Entre le code de ton foyer (il t’a été donné avec le lien d’invitation). Le menu de la semaine et le stock sont propres à chaque foyer.</p>
+      <input type="text" id="foyerGateInput" class="obj-input" style="width:100%; margin-bottom:10px;" placeholder="code du foyer" autocapitalize="none" autocorrect="off">
+      <button class="btn btn-primary btn-block" id="foyerGateBtn">Continuer</button>
+    </div>`;
+  document.body.appendChild(gate);
+  const go = ()=>{
+    const code = sanitizeFoyer(gate.querySelector('#foyerGateInput').value);
+    if(!code || code === COMMUN_DOC){ alert('Code invalide.'); return; }
+    try{ localStorage.setItem(FOYER_KEY, code); }catch(e){}
+    location.reload();
+  };
+  gate.querySelector('#foyerGateBtn').onclick = go;
+  gate.querySelector('#foyerGateInput').addEventListener('keydown', e=>{ if(e.key==='Enter') go(); });
+}
+
 async function boot(){
+  if(!FOYER){ askFoyer(); return; }
   render(); // affichage immédiat avec les données en cache local
   await waitForFirestoreReady(4000);
+  if(!syncEnabled()){ seedIfEmpty(); render(); return; }
   await initialCloudSync();
-  startRealtimeSync();
-  render(); // corrige l'affichage si la fusion a changé quelque chose
 }
 
 /* ============================================================
@@ -1865,19 +1981,25 @@ function syncSectionHTML(){
   if(!syncEnabled()){
     return `
     <div class="card">
-      <div class="section-title">Espace partagé (2 personnes)</div>
+      <div class="section-title">Espace partagé</div>
       <p class="hint">Pas encore connecté (vérifie la connexion internet, ou que le fichier ouvert est bien la dernière version).</p>
     </div>`;
   }
   const last = syncMeta.lastSync ? new Date(syncMeta.lastSync).toLocaleString('fr-FR') : 'pas encore';
   return `
     <div class="card">
-      <div class="section-title">Espace partagé (2 personnes)</div>
+      <div class="section-title">Espace partagé</div>
       <div class="row" style="gap:6px; margin-bottom:8px;">
         <span class="pill" style="background:var(--primary-wash); color:var(--primary);">● Synchro en temps réel active</span>
       </div>
-      <p class="hint">Tout ce que tu modifies ici apparaît automatiquement sur l\u2019autre téléphone (et inversement), sans rien à appuyer. Dernier échange : ${last}.</p>
+      <p class="hint">Tout ce que tu modifies ici apparaît automatiquement sur les autres téléphones de ton foyer (et inversement), sans rien à appuyer. Dernier échange : ${last}.</p>
       <button class="btn btn-ghost btn-block" style="margin-top:10px;" data-act="forceSync">Forcer une synchronisation maintenant</button>
+    </div>
+    <div class="card">
+      <div class="section-title">Mon foyer</div>
+      <p class="hint" style="margin-bottom:10px;">Code de ton foyer : <b>${esc(FOYER)}</b>. Les <b>recettes</b> sont communes à tous les foyers ; le <b>menu de la semaine, le stock, les courses et l\u2019historique</b> sont propres à chaque foyer.</p>
+      <button class="btn btn-soft btn-block" data-act="inviteFoyer">Inviter un autre foyer (copier le lien)</button>
+      <button class="btn btn-ghost btn-block" style="margin-top:8px;" data-act="changeFoyer">Changer de foyer sur cet appareil</button>
     </div>`;
 }
 
@@ -1900,7 +2022,7 @@ document.getElementById('settingsBtn').addEventListener('click', ()=>{
     </div>
     <div class="card">
       <div class="section-title">Réinitialiser</div>
-      <p class="hint" style="margin-bottom:10px;">Efface toutes les recettes, menus, courses, stocks et l\u2019historique de cet appareil.</p>
+      <p class="hint" style="margin-bottom:10px;">Efface les menus, courses, stocks et l\u2019historique de ton foyer. Les recettes (communes à tous les foyers) sont conservées.</p>
       <button class="btn btn-danger btn-block" data-act="resetData">Tout effacer</button>
     </div>
   `;
@@ -1912,6 +2034,28 @@ document.getElementById('settingsBtn').addEventListener('click', ()=>{
       await pushToCloudSilent();
       toast('Synchronisation forcée effectuée.');
       reopenSettings();
+    };
+    const inviteBtn = sheet.querySelector('[data-act="inviteFoyer"]');
+    if(inviteBtn) inviteBtn.onclick = async ()=>{
+      const suggestion = 'foyer-' + Math.random().toString(36).slice(2,8);
+      const raw = prompt('Code pour l\u2019autre foyer (lettres, chiffres, tirets). Choisis-en un difficile à deviner, différent du tien :', suggestion);
+      if(raw === null) return;
+      const code = sanitizeFoyer(raw);
+      if(!code || code === COMMUN_DOC || code === FOYER){ alert('Code invalide ou identique au tien.'); return; }
+      const link = location.origin + location.pathname + '?foyer=' + encodeURIComponent(code);
+      try{ await navigator.clipboard.writeText(link); toast('Lien copié : envoie-le à l\u2019autre foyer.'); }
+      catch(e){ prompt('Copie ce lien et envoie-le à l\u2019autre foyer :', link); }
+    };
+    const changeBtn = sheet.querySelector('[data-act="changeFoyer"]');
+    if(changeBtn) changeBtn.onclick = ()=>{
+      const raw = prompt('Nouveau code de foyer pour cet appareil :', FOYER);
+      if(raw === null) return;
+      const code = sanitizeFoyer(raw);
+      if(!code || code === COMMUN_DOC){ alert('Code invalide.'); return; }
+      if(code === FOYER) return;
+      if(!confirm('Passer au foyer « ' + code + ' » ? Cet appareil affichera le menu et le stock de ce foyer (l\u2019ancien reste intact).')) return;
+      try{ localStorage.setItem(FOYER_KEY, code); }catch(e){}
+      location.reload();
     };
     sheet.querySelector('[data-act="closeModal"]').onclick = closeModal;
     sheet.querySelector('[data-act="exportData"]').onclick = ()=>{
@@ -1929,7 +2073,8 @@ document.getElementById('settingsBtn').addEventListener('click', ()=>{
       reader.onload = ()=>{
         try{
           const imported = JSON.parse(reader.result);
-          data = Object.assign(defaultData(), imported);
+          const keepRecipes = mergeByKey(data.recipes, imported.recipes, r=>r.nom.trim().toLowerCase());
+          data = Object.assign(defaultData(), imported, {recipes: keepRecipes});
           saveData();
           closeModal();
           render();
@@ -1942,7 +2087,9 @@ document.getElementById('settingsBtn').addEventListener('click', ()=>{
     });
     sheet.querySelector('[data-act="resetData"]').onclick = ()=>{
       if(confirm('Es-tu sûr(e) ? Cette action est irréversible.')){
+        const keepRecipes = data.recipes;
         data = defaultData();
+        data.recipes = keepRecipes;
         saveData();
         closeModal();
         render();
@@ -2100,6 +2247,10 @@ function attachTabEvents(){
 ============================================================ */
 function seedIfEmpty(){
   if(data.recipes.length) return;
+  seedRecipes();
+  saveData();
+}
+function seedRecipes(){
   data.recipes = [
     {id:uid(), nom:'Porridge aux fruits', types:['petit-dej'], calories:350,
       ingredients:[{nom:'Flocons d\u2019avoine',quantite:'60',unite:'g'},{nom:'Lait',quantite:'200',unite:'ml'},{nom:'Banane',quantite:'1',unite:''}],
@@ -2111,7 +2262,6 @@ function seedIfEmpty(){
       ingredients:[{nom:'Cuisses de poulet',quantite:'4',unite:''},{nom:'Pommes de terre',quantite:'600',unite:'g'},{nom:'Carottes',quantite:'3',unite:''}],
       instructions:'Four à 200°C, 45 minutes, en retournant à mi-cuisson.', notes:''}
   ];
-  saveData();
 }
 
 /* ============================================================
